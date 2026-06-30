@@ -133,8 +133,6 @@ local State = {
         fishConns = {},
         fishLastBite = 0,
         fishDetectMode = "both",  -- "swim", "impact", or "both"
-        fishMacroMode = false,    -- false = detection mode, true = timer-based macro mode
-        fishMacroInterval = 1,    -- seconds between cast attempts in macro mode
         -- Auto Rifts
         autoRifts = false,
         riftsThread = nil,
@@ -625,51 +623,6 @@ do
         local p = Instance.new("UIPadding")
         p.PaddingLeft = UDim.new(0, 8)
         p.Parent = RodNameBox
-end
-
--- Macro interval input (user-adjustable seconds between casts)
-local FishIntervalBox = Instance.new("TextBox")
-FishIntervalBox.Size = UDim2.new(1, 0, 0, 26)
-FishIntervalBox.Position = UDim2.new(0, 0, 0, 376)
-FishIntervalBox.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
-FishIntervalBox.BorderSizePixel = 0
-FishIntervalBox.PlaceholderText = "Macro interval seconds (e.g. 1)"
-FishIntervalBox.PlaceholderColor3 = Color3.fromRGB(90, 100, 130)
-FishIntervalBox.Text = "1"
-FishIntervalBox.TextColor3 = Color3.fromRGB(220, 230, 255)
-FishIntervalBox.Font = Enum.Font.Gotham
-FishIntervalBox.TextSize = 12
-FishIntervalBox.ClearTextOnFocus = false
-FishIntervalBox.Parent = PlayerPage
-
-do
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, 6)
-        c.Parent = FishIntervalBox
-end
-do
-        local p = Instance.new("UIPadding")
-        p.PaddingLeft = UDim.new(0, 8)
-        p.Parent = FishIntervalBox
-end
-
--- Macro Mode toggle button (timer-based spam instead of sound detection)
-local FishMacroModeBtn = Instance.new("TextButton")
-FishMacroModeBtn.Size = UDim2.new(1, 0, 0, 26)
-FishMacroModeBtn.Position = UDim2.new(0, 0, 0, 406)
-FishMacroModeBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 90)
-FishMacroModeBtn.BorderSizePixel = 0
-FishMacroModeBtn.Text = "Mode: Detection (click for Macro)"
-FishMacroModeBtn.TextColor3 = Color3.fromRGB(220, 220, 255)
-FishMacroModeBtn.Font = Enum.Font.GothamBold
-FishMacroModeBtn.TextSize = 11
-FishMacroModeBtn.AutoButtonColor = false
-FishMacroModeBtn.Parent = PlayerPage
-
-do
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, 6)
-        c.Parent = FishMacroModeBtn
 end
 
 -- Discovery Mode button (logs all events when fishing)
@@ -6122,99 +6075,7 @@ local function stopFishDiscovery()
         print("[FishDiscovery] === STOPPED ===")
 end
 
--- Macro-mode fishing: timer based instead of sound-detection based
--- Flow: cast -> wait N seconds (user adjustable) -> spam reel -> stop spam if Loot (catch) fires -> repeat
-local function startMacroFish()
-        if State.autoFish then return end
-        State.autoFish = true
-        State.fishRodName = RodNameBox.Text or "Rod of Kings"
-        State.fishMacroInterval = tonumber(FishIntervalBox.Text) or 1
-        AutoFishBtn.Text = "[ ]  Stop Auto Fish"
-        AutoFishBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
-
-        if FishStatus then
-                FishStatus.Text = "Macro Fish ON - interval " .. tostring(State.fishMacroInterval) .. "s"
-                FishStatus.TextColor3 = Color3.fromRGB(100, 220, 255)
-        end
-        print("[AutoFish-Macro] Started with rod: " .. State.fishRodName .. " | interval: " .. tostring(State.fishMacroInterval) .. "s")
-
-        local catchCount = 0
-        local fishCaught = false  -- flag set when Loot fires (server confirms a catch)
-
-        -- Hook Remotes.Loot to detect catches - this is how we know to stop spamming
-        local remotesFolder = ReplicatedStorage:FindFirstChild("Remotes")
-        if remotesFolder then
-                local lootRemote = remotesFolder:FindFirstChild("Loot")
-                if lootRemote and lootRemote:IsA("RemoteEvent") then
-                        local lootConn = lootRemote.OnClientEvent:Connect(function(...)
-                                local args = {...}
-                                catchCount = catchCount + 1
-                                fishCaught = true
-                                local fishName = tostring(args[1] or "unknown")
-                                print("[AutoFish-Macro] CAUGHT #" .. tostring(catchCount) .. ": " .. fishName)
-                                if FishStatus then
-                                        FishStatus.Text = "Caught #" .. tostring(catchCount) .. ": " .. fishName
-                                        FishStatus.TextColor3 = Color3.fromRGB(100, 255, 150)
-                                end
-                        end)
-                        table.insert(State.fishConns, lootConn)
-                end
-        end
-
-        State.fishThread = task.spawn(function()
-                while State.autoFish do
-                        local interval = tonumber(FishIntervalBox.Text) or State.fishMacroInterval
-                        if interval < 0.1 then interval = 0.1 end
-                        State.fishMacroInterval = interval
-
-                        -- Step 1: cast once
-                        local rod = findRodTool(State.fishRodName)
-                        if rod then
-                                fireFishingEvent(rod, getCastPosition())
-                                print("[AutoFish-Macro] Cast fired")
-                        end
-                        if FishStatus then
-                                FishStatus.Text = "Cast - waiting " .. string.format("%.1f", interval) .. "s..."
-                                FishStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
-                        end
-
-                        -- Step 2: wait the user-set interval
-                        local waitStart = tick()
-                        while State.autoFish and (tick() - waitStart) < interval do
-                                task.wait(0.05)
-                        end
-                        if not State.autoFish then break end
-
-                        -- Step 3: spam-reel fire, stop early if a catch (Loot) fires
-                        fishCaught = false
-                        if FishStatus then
-                                FishStatus.Text = "Spamming reel..."
-                                FishStatus.TextColor3 = Color3.fromRGB(255, 120, 120)
-                        end
-                        local reelCount = 0
-                        local reelStart = tick()
-                        while State.autoFish and not fishCaught and (tick() - reelStart) < math.max(interval, 1) * 5 do
-                                local r = findRodTool(State.fishRodName)
-                                if r then
-                                        fireFishingEvent(r, getCastPosition())
-                                        reelCount = reelCount + 1
-                                end
-                                task.wait(0.1)
-                        end
-                        print("[AutoFish-Macro] Reel spam done - fired " .. tostring(reelCount) .. "x | caught: " .. tostring(fishCaught))
-
-                        if fishCaught then
-                                if FishStatus then
-                                        FishStatus.Text = "Got fish! Restarting cycle..."
-                                        FishStatus.TextColor3 = Color3.fromRGB(100, 255, 150)
-                                end
-                        end
-                        task.wait(0.2)
-                end
-        end)
-end
-
-
+local function startAutoFish()
         if State.autoFish then return end
         State.autoFish = true
         State.fishRodName = RodNameBox.Text or "Rod of Kings"
@@ -6392,25 +6253,7 @@ AutoFishBtn.MouseButton1Click:Connect(function()
         if State.autoFish then
                 stopAutoFish()
         else
-                if State.fishMacroMode then
-                        startMacroFish()
-                else
-                        startAutoFish()
-                end
-        end
-end)
-
-FishMacroModeBtn.MouseButton1Click:Connect(function()
-        if State.autoFish then
-                stopAutoFish()
-        end
-        State.fishMacroMode = not State.fishMacroMode
-        if State.fishMacroMode then
-                FishMacroModeBtn.Text = "Mode: Macro (click for Detection)"
-                FishMacroModeBtn.BackgroundColor3 = Color3.fromRGB(100, 80, 160)
-        else
-                FishMacroModeBtn.Text = "Mode: Detection (click for Macro)"
-                FishMacroModeBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 90)
+                startAutoFish()
         end
 end)
 
@@ -6791,26 +6634,26 @@ local function startAutoRifts()
                                 end
                                 task.wait(0.5)
 
-                                -- Step 2b: Check if dungeon loaded (workspace.DungeonRing.Outer exists)
+                                -- Step 2b: Wait for NewZone change (rift activated)
+                                newZoneChanged = false
+                                newZoneName = nil
                                 if RiftsStatus then
-                                        RiftsStatus.Text = "Checking for DungeonRing.Outer..."
+                                        RiftsStatus.Text = "Waiting for NewZone change..."
                                         RiftsStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
                                 end
-                                print("[AutoRifts] Checking workspace.DungeonRing.Outer...")
-                                local dungeonRing = workspace:FindFirstChild("DungeonRing")
-                                local dungeonOuter = dungeonRing and dungeonRing:FindFirstChild("Outer")
-                                if not dungeonOuter then
-                                        print("[AutoRifts] DungeonRing.Outer not found - rift active, starting camp/kill")
+                                print("[AutoRifts] Waiting for NewZone change (rift activation)...")
+                                local zoneWaitStart = tick()
+                                while State.autoRifts and not newZoneChanged and (tick() - zoneWaitStart) < 15 do
+                                        task.wait(0.2)
+                                end
+                                if newZoneChanged then
+                                        print("[AutoRifts] Zone changed to: " .. tostring(newZoneName) .. " - rift activated!")
                                         if RiftsStatus then
-                                                RiftsStatus.Text = "Rift active - starting camp/kill"
+                                                RiftsStatus.Text = "Zone: " .. tostring(newZoneName) .. " - rift active!"
                                                 RiftsStatus.TextColor3 = Color3.fromRGB(100, 255, 150)
                                         end
                                 else
-                                        print("[AutoRifts] DungeonRing.Outer still exists - rift not activated, retrying")
-                                        if RiftsStatus then
-                                                RiftsStatus.Text = "DungeonRing.Outer found - rift not active"
-                                                RiftsStatus.TextColor3 = Color3.fromRGB(255, 150, 150)
-                                        end
+                                        print("[AutoRifts] No NewZone change detected after 15s - proceeding anyway")
                                 end
                                 task.wait(0.5)
 
