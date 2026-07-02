@@ -132,7 +132,7 @@ local State = {
         fishThread = nil,
         fishConns = {},
         fishLastBite = 0,
-        fishDetectMode = "both",  -- "swim", "impact", or "both"
+        fishWaitSeconds = 1.4,       -- seconds to wait after casting before attempting to catch
         -- Auto Rifts
         autoRifts = false,
         riftsThread = nil,
@@ -148,7 +148,7 @@ local refreshOreList
 local refreshMobList
 
 -- ================================================================
--- // SECTION 1: EARLY UI (NO PCALL â€” always works even if rest crashes)
+-- // SECTION 1: EARLY UI (NO PCALL — always works even if rest crashes)
 -- ================================================================
 
 local ScreenGui = Instance.new("ScreenGui")
@@ -228,7 +228,7 @@ end)
 print("[Pilgrammed] Toggle UI ready!")
 
 -- ================================================================
--- // SECTION 2: ALL UI ELEMENTS (NO PCALL â€” always created)
+-- // SECTION 2: ALL UI ELEMENTS (NO PCALL — always created)
 -- ================================================================
 
 -- Title bar
@@ -354,20 +354,33 @@ local function showPage(pageName)
 end
 
 -- DRAGGING (always works)
+-- One shared InputChanged listener instead of one per draggable - prevents connection leak
+local _dragTargets = {}
+UserInputService.InputChanged:Connect(function(input)
+        for _, d in ipairs(_dragTargets) do
+                if input == d.dragInput and d.dragging then
+                        local delta = input.Position - d.dragStart
+                        d.targetFrame.Position = UDim2.new(
+                                d.startPos.X.Scale, d.startPos.X.Offset + delta.X,
+                                d.startPos.Y.Scale, d.startPos.Y.Offset + delta.Y
+                        )
+                end
+        end
+end)
+
 local function makeDraggable(dragHandle, targetFrame, canMoveCheck)
-        local dragging = false
-        local dragStart, startPos
-        local dragInput
+        local d = {dragging=false, dragStart=nil, startPos=nil, dragInput=nil, targetFrame=targetFrame}
+        table.insert(_dragTargets, d)
         dragHandle.InputBegan:Connect(function(input)
                 if input.UserInputType == Enum.UserInputType.MouseButton1
                         or input.UserInputType == Enum.UserInputType.Touch then
                         if canMoveCheck and not canMoveCheck() then return end
-                        dragging = true
-                        dragStart = input.Position
-                        startPos = targetFrame.Position
+                        d.dragging = true
+                        d.dragStart = input.Position
+                        d.startPos = targetFrame.Position
                         input.Changed:Connect(function()
                                 if input.UserInputState == Enum.UserInputState.End then
-                                        dragging = false
+                                        d.dragging = false
                                 end
                         end)
                 end
@@ -375,21 +388,15 @@ local function makeDraggable(dragHandle, targetFrame, canMoveCheck)
         dragHandle.InputChanged:Connect(function(input)
                 if input.UserInputType == Enum.UserInputType.MouseMovement
                         or input.UserInputType == Enum.UserInputType.Touch then
-                        dragInput = input
-                end
-        end)
-        UserInputService.InputChanged:Connect(function(input)
-                if input == dragInput and dragging then
-                        local delta = input.Position - dragStart
-                        targetFrame.Position = UDim2.new(
-                                startPos.X.Scale, startPos.X.Offset + delta.X,
-                                startPos.Y.Scale, startPos.Y.Offset + delta.Y
-                        )
+                        d.dragInput = input
                 end
         end)
 end
 
 makeDraggable(TitleBar, MainFrame, nil)
+
+-- Show UI on load
+MainFrame.Visible = true
 
 -- // PLAYER PAGE
 local PlayerPage = Instance.new("ScrollingFrame")
@@ -592,7 +599,7 @@ local FishTitle = Instance.new("TextLabel")
 FishTitle.Size = UDim2.new(1, 0, 0, 20)
 FishTitle.Position = UDim2.new(0, 0, 0, 322)
 FishTitle.BackgroundTransparency = 1
-FishTitle.Text = "Auto Fishing (auto-click when fish bites)"
+FishTitle.Text = "Auto Fishing"
 FishTitle.TextColor3 = Color3.fromRGB(100, 220, 180)
 FishTitle.TextXAlignment = Enum.TextXAlignment.Left
 FishTitle.Font = Enum.Font.GothamBold
@@ -605,7 +612,7 @@ RodNameBox.Size = UDim2.new(1, 0, 0, 26)
 RodNameBox.Position = UDim2.new(0, 0, 0, 346)
 RodNameBox.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
 RodNameBox.BorderSizePixel = 0
-RodNameBox.PlaceholderText = "Rod name (e.g. Rod Of Kings)"
+RodNameBox.PlaceholderText = "Rod name (e.g. Rod of Kings)"
 RodNameBox.PlaceholderColor3 = Color3.fromRGB(90, 100, 130)
 RodNameBox.Text = "Rod of Kings"
 RodNameBox.TextColor3 = Color3.fromRGB(220, 230, 255)
@@ -613,41 +620,51 @@ RodNameBox.Font = Enum.Font.Gotham
 RodNameBox.TextSize = 12
 RodNameBox.ClearTextOnFocus = false
 RodNameBox.Parent = PlayerPage
+do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,6); c.Parent = RodNameBox end
+do local p = Instance.new("UIPadding"); p.PaddingLeft = UDim.new(0,8); p.Parent = RodNameBox end
 
-do
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, 6)
-        c.Parent = RodNameBox
-end
-do
-        local p = Instance.new("UIPadding")
-        p.PaddingLeft = UDim.new(0, 8)
-        p.Parent = RodNameBox
-end
+-- Wait time selector (seconds after cast before attempting to catch)
+local FishWaitLabel = Instance.new("TextLabel")
+FishWaitLabel.Size = UDim2.new(0, 180, 0, 26)
+FishWaitLabel.Position = UDim2.new(0, 0, 0, 406)
+FishWaitLabel.BackgroundTransparency = 1
+FishWaitLabel.Text = "Wait before reel: 1.40 sec"
+FishWaitLabel.TextColor3 = Color3.fromRGB(160, 180, 220)
+FishWaitLabel.TextXAlignment = Enum.TextXAlignment.Left
+FishWaitLabel.Font = Enum.Font.Gotham
+FishWaitLabel.TextSize = 12
+FishWaitLabel.Parent = PlayerPage
 
--- Discovery Mode button (logs all events when fishing)
-local FishDiscoveryBtn = Instance.new("TextButton")
-FishDiscoveryBtn.Size = UDim2.new(1, 0, 0, 30)
-FishDiscoveryBtn.Position = UDim2.new(0, 0, 0, 378)
-FishDiscoveryBtn.BackgroundColor3 = Color3.fromRGB(100, 80, 40)
-FishDiscoveryBtn.BorderSizePixel = 0
-FishDiscoveryBtn.Text = "Discovery Mode: OFF (log fishing events)"
-FishDiscoveryBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-FishDiscoveryBtn.Font = Enum.Font.GothamBold
-FishDiscoveryBtn.TextSize = 11
-FishDiscoveryBtn.AutoButtonColor = false
-FishDiscoveryBtn.Parent = PlayerPage
+local FishWaitDownBtn = Instance.new("TextButton")
+FishWaitDownBtn.Size = UDim2.new(0, 28, 0, 24)
+FishWaitDownBtn.Position = UDim2.new(0, 186, 0, 408)
+FishWaitDownBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+FishWaitDownBtn.BorderSizePixel = 0
+FishWaitDownBtn.Text = "-"
+FishWaitDownBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
+FishWaitDownBtn.Font = Enum.Font.GothamBold
+FishWaitDownBtn.TextSize = 14
+FishWaitDownBtn.AutoButtonColor = false
+FishWaitDownBtn.Parent = PlayerPage
+do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,6); c.Parent = FishWaitDownBtn end
 
-do
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, 8)
-        c.Parent = FishDiscoveryBtn
-end
+local FishWaitUpBtn = Instance.new("TextButton")
+FishWaitUpBtn.Size = UDim2.new(0, 28, 0, 24)
+FishWaitUpBtn.Position = UDim2.new(0, 218, 0, 408)
+FishWaitUpBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+FishWaitUpBtn.BorderSizePixel = 0
+FishWaitUpBtn.Text = "+"
+FishWaitUpBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
+FishWaitUpBtn.Font = Enum.Font.GothamBold
+FishWaitUpBtn.TextSize = 14
+FishWaitUpBtn.AutoButtonColor = false
+FishWaitUpBtn.Parent = PlayerPage
+do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,6); c.Parent = FishWaitUpBtn end
 
 -- Auto Fish toggle button
 local AutoFishBtn = Instance.new("TextButton")
 AutoFishBtn.Size = UDim2.new(1, 0, 0, 36)
-AutoFishBtn.Position = UDim2.new(0, 0, 0, 414)
+AutoFishBtn.Position = UDim2.new(0, 0, 0, 440)
 AutoFishBtn.BackgroundColor3 = Color3.fromRGB(40, 120, 100)
 AutoFishBtn.BorderSizePixel = 0
 AutoFishBtn.Text = ">  Start Auto Fish"
@@ -656,91 +673,19 @@ AutoFishBtn.Font = Enum.Font.GothamBold
 AutoFishBtn.TextSize = 14
 AutoFishBtn.AutoButtonColor = false
 AutoFishBtn.Parent = PlayerPage
-
-do
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, 8)
-        c.Parent = AutoFishBtn
-end
+do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,8); c.Parent = AutoFishBtn end
 
 local FishStatus = Instance.new("TextLabel")
 FishStatus.Size = UDim2.new(1, 0, 0, 30)
-FishStatus.Position = UDim2.new(0, 0, 0, 454)
+FishStatus.Position = UDim2.new(0, 0, 0, 480)
 FishStatus.BackgroundTransparency = 1
-FishStatus.Text = "Status: Idle - Turn on Discovery Mode to find fishing signal"
+FishStatus.Text = "Status: Idle"
 FishStatus.TextColor3 = Color3.fromRGB(140, 150, 180)
 FishStatus.TextXAlignment = Enum.TextXAlignment.Left
 FishStatus.Font = Enum.Font.Gotham
 FishStatus.TextSize = 10
 FishStatus.TextWrapped = true
 FishStatus.Parent = PlayerPage
-
--- Detect Sound input (which sound names trigger a bite)
-local DetectSoundLabel = Instance.new("TextLabel")
-DetectSoundLabel.Size = UDim2.new(1, 0, 0, 16)
-DetectSoundLabel.Position = UDim2.new(0, 0, 0, 490)
-DetectSoundLabel.BackgroundTransparency = 1
-DetectSoundLabel.Text = "Detect bite by sound (pick which soundId is the bite):"
-DetectSoundLabel.TextColor3 = Color3.fromRGB(160, 180, 220)
-DetectSoundLabel.TextXAlignment = Enum.TextXAlignment.Left
-DetectSoundLabel.Font = Enum.Font.Gotham
-DetectSoundLabel.TextSize = 10
-DetectSoundLabel.Parent = PlayerPage
-
--- Three buttons: Swim, ImpactWater, Both (user picks which to detect)
-local DetectSwimBtn = Instance.new("TextButton")
-DetectSwimBtn.Size = UDim2.new(0.31, 0, 0, 24)
-DetectSwimBtn.Position = UDim2.new(0, 0, 0, 508)
-DetectSwimBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-DetectSwimBtn.BorderSizePixel = 0
-DetectSwimBtn.Text = "Swim"
-DetectSwimBtn.TextColor3 = Color3.fromRGB(220, 220, 240)
-DetectSwimBtn.Font = Enum.Font.GothamBold
-DetectSwimBtn.TextSize = 11
-DetectSwimBtn.AutoButtonColor = false
-DetectSwimBtn.Parent = PlayerPage
-
-do
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, 6)
-        c.Parent = DetectSwimBtn
-end
-
-local DetectImpactBtn = Instance.new("TextButton")
-DetectImpactBtn.Size = UDim2.new(0.31, 0, 0, 24)
-DetectImpactBtn.Position = UDim2.new(0.33, 0, 0, 508)
-DetectImpactBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-DetectImpactBtn.BorderSizePixel = 0
-DetectImpactBtn.Text = "ImpactWater"
-DetectImpactBtn.TextColor3 = Color3.fromRGB(220, 220, 240)
-DetectImpactBtn.Font = Enum.Font.GothamBold
-DetectImpactBtn.TextSize = 11
-DetectImpactBtn.AutoButtonColor = false
-DetectImpactBtn.Parent = PlayerPage
-
-do
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, 6)
-        c.Parent = DetectImpactBtn
-end
-
-local DetectBothBtn = Instance.new("TextButton")
-DetectBothBtn.Size = UDim2.new(0.34, 0, 0, 24)
-DetectBothBtn.Position = UDim2.new(0.66, 0, 0, 508)
-DetectBothBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 80)
-DetectBothBtn.BorderSizePixel = 0
-DetectBothBtn.Text = "Both"
-DetectBothBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-DetectBothBtn.Font = Enum.Font.GothamBold
-DetectBothBtn.TextSize = 11
-DetectBothBtn.AutoButtonColor = false
-DetectBothBtn.Parent = PlayerPage
-
-do
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, 6)
-        c.Parent = DetectBothBtn
-end
 
 -- // AUTO PAGE
 local AutoPage = Instance.new("Frame")
@@ -2400,7 +2345,7 @@ local RiftsBtn = createSidebarButton("Rifts", "R")
 local allSideBtns = {PlayerBtn, AutoBtn, MobBtn, SettingsBtn, JunkpitsBtn, RiftsBtn}
 setActiveSidebarBtn(PlayerBtn, allSideBtns)
 
--- // SIDEBAR NAVIGATION (outside pcall â€” basic page switching always works)
+-- // SIDEBAR NAVIGATION (outside pcall — basic page switching always works)
 PlayerBtn.MouseButton1Click:Connect(function()
         setActiveSidebarBtn(PlayerBtn, allSideBtns)
         showPage("Player")
@@ -2436,7 +2381,7 @@ end)
 print("[Pilgrammed] UI elements created!")
 
 -- ================================================================
--- // SECTION 3: LOGIC CODE (IN PCALL â€” errors don't kill UI)
+-- // SECTION 3: LOGIC CODE (IN PCALL — errors don't kill UI)
 -- ================================================================
 
 local ok, err = pcall(function()
@@ -2547,17 +2492,29 @@ local function flyUnderAndFacePart(part)
         end
 end
 
--- // NOCLIP
+-- // NOCLIP (cached — same pattern as mob farm, avoids GetDescendants every frame)
+local _noclipCache = {}
+local _noclipCacheTime = 0
 local function startNoclip()
         if State.noclipConnection then return end
+        _noclipCache = {}
+        _noclipCacheTime = 0
         State.noclipConnection = RunService.Stepped:Connect(function()
-                local char = LocalPlayer.Character
-                if char then
-                        for _, part in ipairs(char:GetDescendants()) do
-                                if part:IsA("BasePart") then
-                                        part.CanCollide = false
+                local now = tick()
+                if now - _noclipCacheTime > NOCLIP_REFRESH_INTERVAL then
+                        _noclipCacheTime = now
+                        _noclipCache = {}
+                        local char = LocalPlayer.Character
+                        if char then
+                                for _, part in ipairs(char:GetDescendants()) do
+                                        if part:IsA("BasePart") then
+                                                table.insert(_noclipCache, part)
+                                        end
                                 end
                         end
+                end
+                for _, part in ipairs(_noclipCache) do
+                        part.CanCollide = false
                 end
         end)
 end
@@ -2651,7 +2608,7 @@ local function watchNPC(humanoid)
 
         humanoid.AnimationPlayed:Connect(function(track)
                 if not State.autoParry then return end
-                -- Note: do NOT check State.isBlocking here â€” we want to detect new hits
+                -- Note: do NOT check State.isBlocking here — we want to detect new hits
                 -- even while blocking, so we can extend the hold
 
                 local anim = track.Animation
@@ -2659,27 +2616,31 @@ local function watchNPC(humanoid)
                 local name = anim.Name:lower()
                 local id = anim.AnimationId or ""
 
-                -- Detect attack animations by name or known attack IDs
+                -- Detect attack animations by name keyword
                 local isAttack = name:find("attack") or name:find("swing") or name:find("slash")
-                        or name:find("hit") or name:find("combat") or name:find("m1")
-                        or name:find("ability") or name:find("heavy")
-                        or name:find("strike") or name:find("melee")
-
-                if not isAttack then
-                        -- Also check known Pilgrammed attack animation IDs
-                        for _, attackId in ipairs({
-                                "rbxassetid://", -- generic check
-                        }) do
-                                if id:find(attackId) then
-                                        isAttack = true
-                                        break
-                                end
-                        end
-                end
+                        or name:find("hit") or name:find("combat") or name:find("m1") or name:find("m2")
+                        or name:find("ability") or name:find("heavy") or name:find("light")
+                        or name:find("strike") or name:find("melee") or name:find("punch")
+                        or name:find("kick") or name:find("lunge") or name:find("charge")
+                        or name:find("bite") or name:find("claw") or name:find("smash")
+                        or name:find("stab") or name:find("throw") or name:find("cast")
+                        or name:find("action") or name:find("wind") or name:find("spin")
 
                 if isAttack then
-                        -- Fire immediately (no pre-block delay â€” server AttackWarning handles timing)
-                        doParry("Anim: " .. name)
+                        -- Re-check range NOW, at the moment of the swing — not just when the
+                        -- mob was first spotted. If it walked out of PARRY_RANGE, skip it.
+                        local char = LocalPlayer.Character
+                        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                        local eChar = humanoid.Parent
+                        local eHrp = eChar and eChar:FindFirstChild("HumanoidRootPart")
+                        if hrp and eHrp and (eHrp.Position - hrp.Position).Magnitude <= PARRY_RANGE then
+                                -- Small reaction delay so the block lands closer to actual impact
+                                -- instead of firing the instant the animation starts.
+                                task.delay(PARRY_PRE_BLOCK, function()
+                                        if not State.autoParry then return end
+                                        doParry("Anim:" .. name)
+                                end)
+                        end
                 end
         end)
 
@@ -2737,7 +2698,7 @@ local function onMobSpawnedForParry(mob)
         local hrp = char:FindFirstChild("HumanoidRootPart")
         local eHrp = mob:FindFirstChild("HumanoidRootPart")
         if not hrp or not eHrp then
-                -- Mob might not have HRP yet â€” wait briefly and retry once
+                -- Mob might not have HRP yet — wait briefly and retry once
                 task.spawn(function()
                         task.wait(0.3)
                         if not State.autoParry then return end
@@ -2808,42 +2769,60 @@ local function startAutoParry()
         State.parryCount = 0
         lastParryTime = 0
 
-        -- ===== LAYER 1: AttackWarning Remote (BEST - server warns before hit) =====
+        local layersActive = 0
+
+        -- ===== LAYER 1: AttackWarning Remote (server warns BEFORE hit — best timing) =====
         local awRemote = getAttackWarningRemote()
         if awRemote and awRemote:IsA("RemoteEvent") then
                 State.attackWarningConn = awRemote.OnClientEvent:Connect(function(...)
                         if not State.autoParry then return end
-                        local args = {...}
-                        -- Log what AttackWarning sends (for debugging)
-                        print("[AutoParry] AttackWarning fired! Args:", unpack(args))
-                        -- Block immediately - the server is warning us an attack is coming
                         doParry("AttackWarning")
                 end)
-                print("[AutoParry] Layer 1 ACTIVE: AttackWarning remote connected")
+                layersActive = layersActive + 1
+                print("[AutoParry] Layer 1 ACTIVE: AttackWarning remote")
         else
-                warn("[AutoParry] AttackWarning remote not found - Layer 1 disabled")
+                warn("[AutoParry] Layer 1 MISS: AttackWarning remote not found")
         end
 
-        -- ===== LAYER 2: Event-based NPC watching (no polling) =====
-        -- One-time initial scan to catch mobs already in range when parry was toggled on
+        -- ===== LAYER 2: Animation-based NPC watching =====
         scanForNearbyNPCs()
-
-        -- Set up event-based mob spawn detection (replaces 5-second polling)
         setupMobSpawnWatcher()
-
-        -- Fallback scan only every 15s (just in case any mob was missed by event hooks)
+        -- Fallback scan every 15s for any missed mobs
         State.npcScanThread = task.spawn(function()
                 while State.autoParry do
                         task.wait(NPC_SCAN_INTERVAL)
-                        if State.autoParry then
-                                scanForNearbyNPCs()
-                        end
+                        if State.autoParry then scanForNearbyNPCs() end
                 end
         end)
+        layersActive = layersActive + 1
+        print("[AutoParry] Layer 2 ACTIVE: Animation watcher")
+
+        -- ===== LAYER 3: Health-drop detector (most reliable fallback) =====
+        -- If our health drops, we got hit — block immediately to catch the next hit
+        -- Works regardless of remote/animation detection
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum then
+                State.lastHealth = hum.Health
+                State.maxHealth = hum.MaxHealth
+                State.parryHealthConn = hum.HealthChanged:Connect(function(newHealth)
+                        if not State.autoParry then return end
+                        if newHealth < State.lastHealth then
+                                -- Health dropped — we took a hit, block immediately for the next one
+                                local dmg = State.lastHealth - newHealth
+                                print("[AutoParry] Layer 3: Health drop " .. string.format("%.1f", dmg) .. " — blocking!")
+                                doParry("HealthDrop")
+                        end
+                        State.lastHealth = newHealth
+                end)
+                layersActive = layersActive + 1
+                print("[AutoParry] Layer 3 ACTIVE: Health-drop detector")
+        else
+                warn("[AutoParry] Layer 3 MISS: No humanoid found")
+        end
 
         if ParryStatus then
-                local layerInfo = awRemote and "2-layer" or "1-layer"
-                ParryStatus.Text = "Status: Watching (" .. layerInfo .. ")..."
+                ParryStatus.Text = "Watching (" .. layersActive .. " layers active)"
                 ParryStatus.TextColor3 = Color3.fromRGB(100, 220, 255)
         end
 end
@@ -2856,6 +2835,10 @@ local function stopAutoParry()
                 State.attackWarningConn:Disconnect()
                 State.attackWarningConn = nil
         end
+        if State.parryHealthConn then
+                State.parryHealthConn:Disconnect()
+                State.parryHealthConn = nil
+        end
         if State.parryConnection then
                 State.parryConnection:Disconnect()
                 State.parryConnection = nil
@@ -2864,12 +2847,11 @@ local function stopAutoParry()
                 State.npcWatchConn:Disconnect()
                 State.npcWatchConn = nil
         end
-        -- Clean up mob spawn watchers
         for _, conn in ipairs(State.mobSpawnConns) do
                 conn:Disconnect()
         end
         State.mobSpawnConns = {}
-        State.npcScanThread = nil  -- loop will exit on next iteration
+        State.npcScanThread = nil
         fireBlock(false)
 end
 
@@ -2902,7 +2884,7 @@ end
 -- (Legacy getMobNames / getAllMobsOfName were replaced by recursive versions below)
 
 -- ================================================================
--- // MOB SCANNING HELPERS (recursive â€” handles both workspace.Mobs.Area.Mob AND workspace.Mobs.Mob)
+-- // MOB SCANNING HELPERS (recursive — handles both workspace.Mobs.Area.Mob AND workspace.Mobs.Mob)
 -- ================================================================
 
 -- Recursively iterate all descendants of `parent` that are Models with Humanoids
@@ -3093,7 +3075,7 @@ local function flyToMob(mob)
         end
 end
 
--- Get the next enabled attack type (cycles through Lightâ†’Heavyâ†’Techâ†’Light...)
+-- Get the next enabled attack type (cycles through Light→Heavy→Tech→Light...)
 -- Returns the attack type number (1, 2, or 3) to fire, or nil if none enabled
 local function getNextAttackType()
         -- Find first enabled attack type starting from current
@@ -3122,7 +3104,7 @@ local function attackMob()
         local char = LocalPlayer.Character
         if not char then return end
 
-        -- If Auto Bow is ON, ONLY use bow â€” never switch to melee weapons
+        -- If Auto Bow is ON, ONLY use bow — never switch to melee weapons
         if State.autoBow then
                 -- Find equipped bow (has "Shoot" remote)
                 local bowWeapon = nil
@@ -3482,7 +3464,7 @@ local function updateCampCircle()
         State.campCirclePart = part
 end
 
--- Find nearest alive mob within camp radius (recursive â€” handles all mob nesting depths)
+-- Find nearest alive mob within camp radius (recursive — handles all mob nesting depths)
 local function findCampTarget()
         if not State.campPoint then return nil end
         return findNearestMobToPoint(State.campPoint, State.campRadius)
@@ -3551,94 +3533,13 @@ local function tpToCampPoint()
         hrp.CFrame = CFrame.new(target)
 end
 
--- Dedicated camp attack: uses shared attack type cycling (Light/Heavy/Tech)
+-- Camp attack reuses attackMob() — set currentMob to campTargetMob before calling
 local function campAttack()
-        local char = LocalPlayer.Character
-        if not char then return end
-
-        -- If Auto Bow is ON, ONLY use bow â€” never switch to melee weapons
-        if State.autoBow then
-                local bowWeapon = nil
-                for _, tool in ipairs(char:GetChildren()) do
-                        if tool:IsA("Tool") and tool:FindFirstChild("Shoot") then
-                                bowWeapon = tool
-                                break
-                        end
-                end
-                if not bowWeapon then
-                        local backpack = LocalPlayer:FindFirstChild("Backpack")
-                        if backpack and State.bowName and State.bowName ~= "" then
-                                local bowTool = backpack:FindFirstChild(State.bowName)
-                                if not bowTool then
-                                        for _, tool in ipairs(backpack:GetChildren()) do
-                                                if tool:IsA("Tool") and tool.Name:lower() == State.bowName:lower() and tool:FindFirstChild("Shoot") then
-                                                        bowTool = tool
-                                                        break
-                                                end
-                                        end
-                                end
-                                if bowTool then
-                                        local hum = char:FindFirstChildOfClass("Humanoid")
-                                        if hum then
-                                                pcall(function() hum:EquipTool(bowTool) end)
-                                                for _, tool in ipairs(char:GetChildren()) do
-                                                        if tool:IsA("Tool") and tool:FindFirstChild("Shoot") then
-                                                                bowWeapon = tool
-                                                                break
-                                                        end
-                                                end
-                                        end
-                                end
-                        end
-                end
-                if bowWeapon then
-                        local shootRemote = bowWeapon:FindFirstChild("Shoot")
-                        if shootRemote and State.campTargetMob then
-                                local mobHrp = State.campTargetMob:FindFirstChild("HumanoidRootPart")
-                                if mobHrp then
-                                        pcall(function()
-                                                shootRemote:InvokeServer(mobHrp.Position, "Arrow", true, 1)
-                                        end)
-                                end
-                        end
-                end
-                return  -- NEVER fall through to melee when Auto Bow is ON
-        end
-
-        -- Normal mode (Auto Bow OFF): use melee weapon
-        local weapon = nil
-        for _, tool in ipairs(char:GetChildren()) do
-                if tool:IsA("Tool") and tool:FindFirstChild("Slash") then
-                        weapon = tool
-                        break
-                end
-        end
-        -- If not equipped, try to equip from backpack (non-yielding)
-        if not weapon then
-                local backpack = LocalPlayer:FindFirstChild("Backpack")
-                if backpack then
-                        for _, tool in ipairs(backpack:GetChildren()) do
-                                if tool:IsA("Tool") and tool:FindFirstChild("Slash") then
-                                        equipWeapon(tool)
-                                        for _, t in ipairs(char:GetChildren()) do
-                                                if t:IsA("Tool") and t:FindFirstChild("Slash") then
-                                                        weapon = t
-                                                        break
-                                                end
-                                        end
-                                        break
-                                end
-                        end
-                end
-        end
-        if not weapon then return end
-        local slash = weapon:FindFirstChild("Slash")
-        if not slash then return end
-        local atkType = getNextAttackType()
-        if not atkType then return end
-        pcall(function()
-                slash:FireServer(atkType)
-        end)
+        if not State.campTargetMob then return end
+        local prev = State.currentMob
+        State.currentMob = State.campTargetMob
+        attackMob()
+        State.currentMob = prev
 end
 
 local function startCampFarm()
@@ -3708,7 +3609,7 @@ local function startCampFarm()
         print("[CampFarm] Started. Point: " .. tostring(State.campPoint) .. " | Radius: " .. tostring(State.campRadius))
 
         -- ===== SINGLE MASTER HEARTBEAT for camp farm =====
-        -- Strategy: TP to mob â†’ attack â†’ when dead/missing â†’ TP back to camp point ONCE â†’ fall (gravity)
+        -- Strategy: TP to mob → attack → when dead/missing → TP back to camp point ONCE → fall (gravity)
         State.campMainConn = RunService.Heartbeat:Connect(function()
                 if not State.autoCampFarming then return end
                 local now = tick()
@@ -3769,7 +3670,7 @@ local function startCampFarm()
                                 end
                         end
                 else
-                        -- No target â€” TP back to camp point ONCE (not every frame)
+                        -- No target — TP back to camp point ONCE (not every frame)
                         if not returnedToCenter then
                                 returnedToCenter = true
                                 tpToCampPoint()
@@ -4854,7 +4755,7 @@ BowRateUpBtn.MouseButton1Click:Connect(function()
 end)
 
 -- ================================================================
--- // KILL SCRIPT â€” stops everything and destroys UI
+-- // KILL SCRIPT — stops everything and destroys UI
 -- ================================================================
 
 local function killScript()
@@ -5283,7 +5184,7 @@ local function startCronoKeyCollect()
                                 -- Still continue to try Exit
                         end
 
-                        -- Phase 1: TP to each level's Firewall (fast â€” just TP and tiny wait)
+                        -- Phase 1: TP to each level's Firewall (fast — just TP and tiny wait)
                         for _, level in ipairs(levels) do
                                 if not State.autoCronoKey then break end
                                 local firewall = level:FindFirstChild("Firewall")
@@ -5297,7 +5198,7 @@ local function startCronoKeyCollect()
                                 end
                         end
 
-                        -- Phase 2: TP to each level's Keys (fast â€” TP each key with brief wait)
+                        -- Phase 2: TP to each level's Keys (fast — TP each key with brief wait)
                         for _, level in ipairs(levels) do
                                 if not State.autoCronoKey then break end
                                 local keys = getAllKeys(level)
@@ -5368,7 +5269,7 @@ local function startCronoKeyCollect()
                                 end
                         end
 
-                        -- Done â€” stop
+                        -- Done — stop
                         State.autoCronoKey = false
                         CronoKeyBtn.Text = "Auto Crono's Crazy Challenge Key Collect"
                         CronoKeyBtn.BackgroundColor3 = Color3.fromRGB(180, 100, 40)
@@ -5415,7 +5316,7 @@ local DELETE_TARGET_NAMES = {
         "SniperOrb",     -- Level21 and possibly others
 }
 
--- Delete target aggressively â€” try multiple strategies because server-owned instances
+-- Delete target aggressively — try multiple strategies because server-owned instances
 -- sometimes resist client-side Destroy()
 local function deleteIfExists(target)
         if not target or not target.Parent then return false end
@@ -5780,7 +5681,7 @@ end)
 -- // AUTO FISHING (with Discovery Mode to find the fishing signal)
 -- ================================================================
 
--- Find the rod tool (equipped or in backpack) â€” case-insensitive name match
+-- Find the rod tool (equipped or in backpack) — case-insensitive name match
 local function findRodTool(rodName)
         if not rodName or rodName == "" then return nil end
         local rodLower = rodName:lower()
@@ -5822,47 +5723,22 @@ end
 -- Args: (WaterPart, position, baitName)
 local function fireFishingEvent(rod, position)
         if not rod then return false end
-        local event = rod:FindFirstChild("Event")
-        if not event then
-                print("[AutoFish] No 'Event' remote found on rod!")
-                return false
-        end
-        local waterPart = findWaterPart()
-        if not waterPart then
-                print("[AutoFish] No Water part found at workspace.Map.SeaBox.Water")
-                return false
-        end
-        local baitName = getBaitName()
-        local args = { waterPart, position, baitName }
         local ok = pcall(function()
+                local waterPart = workspace:WaitForChild("Map"):WaitForChild("SeaBox"):WaitForChild("Water")
+                local event = rod:WaitForChild("Event")
+                local args = { waterPart, position, getBaitName() }
                 event:FireServer(unpack(args))
         end)
-        if ok then
-                return true
-        else
+        if not ok then
                 print("[AutoFish] Failed to fire fishing Event")
-                return false
         end
+        return ok
 end
 
 -- Get the position to cast at (in front of player, slightly down toward water)
 local function getCastPosition()
-        local char = LocalPlayer.Character
-        if not char then return Vector3.new(0, 0, 0) end
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        if not hrp then return Vector3.new(0, 0, 0) end
-        -- Cast 10 studs in front of player, at water level
-        -- Try to find the water part position first
-        local waterPart = findWaterPart()
-        if waterPart and waterPart:IsA("BasePart") then
-                -- Cast at the water's position (closest point to player)
-                local waterPos = waterPart.Position
-                local myPos = hrp.Position
-                -- Position between player and water center
-                return waterPos
-        end
-        -- Fallback: cast 10 studs in front
-        return hrp.Position + hrp.CFrame.LookVector * 10
+        -- pinned known-working cast vector
+        return Vector3.new(-324.7981262207031, -29.400001525878906, -935.5565185546875)
 end
 
 -- PRECISE fishing detection based on Discovery Mode findings:
@@ -6075,161 +5951,160 @@ local function stopFishDiscovery()
         print("[FishDiscovery] === STOPPED ===")
 end
 
+-- // AUTO FISHING (timer-based, fully automatic)
+-- Flow: cast -> wait N sec -> try to catch for 1 sec (stop early if Loot fires) -> if no fish, recast -> repeat
+
+-- Wait time button handlers
+FishWaitDownBtn.MouseButton1Click:Connect(function()
+        State.fishWaitSeconds = math.max(0.1, State.fishWaitSeconds - 0.1)
+        FishWaitLabel.Text = "Wait before reel: " .. string.format("%.2f", State.fishWaitSeconds) .. " sec"
+end)
+FishWaitUpBtn.MouseButton1Click:Connect(function()
+        State.fishWaitSeconds = math.min(15, State.fishWaitSeconds + 0.1)
+        FishWaitLabel.Text = "Wait before reel: " .. string.format("%.2f", State.fishWaitSeconds) .. " sec"
+end)
+
+
+-- NEW: detect if rod is actually equipped (i.e. player is fishing)
+local function isRodEquipped(rodName)
+        local char = LocalPlayer.Character
+        if not char or not rodName or rodName == "" then return false end
+        local rodLower = rodName:lower()
+        for _, tool in ipairs(char:GetChildren()) do
+                if tool:IsA("Tool") and tool.Name:lower() == rodLower then
+                        return true
+                end
+        end
+        return false
+end
+
+
 local function startAutoFish()
         if State.autoFish then return end
         State.autoFish = true
         State.fishRodName = RodNameBox.Text or "Rod of Kings"
         AutoFishBtn.Text = "[ ]  Stop Auto Fish"
         AutoFishBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
-
-        if FishStatus then
-                FishStatus.Text = "Auto Fish ON - listening for nearby sounds..."
-                FishStatus.TextColor3 = Color3.fromRGB(100, 220, 255)
-        end
-        print("[AutoFish] Started with rod: " .. State.fishRodName)
-        print("[AutoFish] Detecting sounds within 8 studs (soundId-based)")
-        print("[AutoFish] Mode: " .. State.fishDetectMode)
-        print("[AutoFish] Flow: detect bite -> wait 1.25s -> spam reel -> cast once -> wait 1.25s -> repeat")
-
-        -- The two soundIds that could be the bite sound
-        local SWIM_SOUND = "rbxasset://sounds/action_swim.mp3"
-        local IMPACT_SOUND = "rbxasset://sounds/impact_water.mp3"
-
-        -- Determine which soundIds to detect based on mode
-        local detectSoundIds = {}
-        if State.fishDetectMode == "swim" then
-                detectSoundIds[SWIM_SOUND] = true
-        elseif State.fishDetectMode == "impact" then
-                detectSoundIds[IMPACT_SOUND] = true
-        else  -- "both"
-                detectSoundIds[SWIM_SOUND] = true
-                detectSoundIds[IMPACT_SOUND] = true
-        end
+        FishStatus.Text = "Waiting for you to cast..."
+        FishStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
+        print("[AutoFish] === STARTED === | Rod: " .. State.fishRodName)
+        print("[AutoFish] CAST YOUR LINE manually — script will detect it and go full auto!")
 
         local catchCount = 0
-        local isReeling = false
-        local biteDetected = false
-        local fishCaught = false  -- flag set when Loot fires
+        local fishCaught = false
+        local savedCastPos = nil  -- position where player first cast (saved for auto-cast)
 
-        -- Hook Remotes.Loot to detect catches
+        -- Hook Remotes.Loot to detect catches (stops the spam early)
         local remotesFolder = ReplicatedStorage:FindFirstChild("Remotes")
         if remotesFolder then
                 local lootRemote = remotesFolder:FindFirstChild("Loot")
                 if lootRemote and lootRemote:IsA("RemoteEvent") then
                         local lootConn = lootRemote.OnClientEvent:Connect(function(...)
-                                local args = {...}
                                 catchCount = catchCount + 1
-                                fishCaught = true  -- signal the reel loop to stop
-                                local fishName = tostring(args[1] or "unknown")
-                                print("[AutoFish] CAUGHT #" .. tostring(catchCount) .. ": " .. fishName)
-                                if FishStatus then
-                                        FishStatus.Text = "Caught #" .. tostring(catchCount) .. ": " .. fishName
-                                        FishStatus.TextColor3 = Color3.fromRGB(100, 255, 150)
-                                end
+                                fishCaught = true
+                                local name = tostring(select(1, ...) or "?")
+                                print("[AutoFish] CAUGHT #" .. catchCount .. ": " .. name)
+                                FishStatus.Text = "Caught #" .. catchCount .. ": " .. name
+                                FishStatus.TextColor3 = Color3.fromRGB(100, 255, 150)
                         end)
                         table.insert(State.fishConns, lootConn)
                 end
         end
 
-        -- SOUND DETECTION: listen for sounds within 8 studs matching the selected soundIds
-        local soundConn = workspace.DescendantAdded:Connect(function(child)
-                if not State.autoFish then return end
-                if not child:IsA("Sound") then return end
-                if isReeling or biteDetected then return end  -- already reeling
+        -- Helper: detect if player is currently fishing (Bobber exists in workspace)
+        local function isPlayerFishing()
+                local bobber = workspace:FindFirstChild("Bobber")
+                return bobber ~= nil
+        end
 
-                -- Check if soundId matches our detection list
-                local sid = child.SoundId
-                if not sid then return end
-                if not detectSoundIds[sid] then return end
-
-                -- Check if sound is within 8 studs of player
-                local char = LocalPlayer.Character
-                if not char then return end
-                local hrp = char:FindFirstChild("HumanoidRootPart")
-                if not hrp then return end
-
-                -- Find the sound's position
-                local soundPart = child.Parent
-                if not soundPart then return end
-                if not soundPart:IsA("BasePart") then
-                        soundPart = child:FindFirstAncestorWhichIsA("BasePart")
+        -- Helper: wait for player to cast (Bobber appears)
+        local function waitForPlayerCast()
+                FishStatus.Text = "Waiting for you to cast..."
+                FishStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
+                print("[AutoFish] Waiting for player to cast line...")
+                while State.autoFish and not isPlayerFishing() do
+                        task.wait(0.1)
                 end
-                if not soundPart then return end
-
-                local dist = (soundPart.Position - hrp.Position).Magnitude
-                if dist <= 8 then
-                        -- Bite detected!
-                        biteDetected = true
-                        print("[AutoFish] BITE! SoundId '" .. sid .. "' at " .. string.format("%.1f", dist) .. " studs")
-                        if FishStatus then
-                                FishStatus.Text = "BITE! Waiting 1.25s..."
-                                FishStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
+                if not State.autoFish then return false end
+                -- Save the cast position (where the bobber is)
+                local bobber = workspace:FindFirstChild("Bobber")
+                if bobber then
+                        if bobber:IsA("BasePart") then
+                                savedCastPos = bobber.Position
+                        elseif bobber:IsA("Model") then
+                                local pp = bobber.PrimaryPart or bobber:FindFirstChildWhichIsA("BasePart")
+                                if pp then savedCastPos = pp.Position end
+                        elseif bobber:IsA("Folder") then
+                                for _, d in ipairs(bobber:GetDescendants()) do
+                                        if d:IsA("BasePart") then
+                                                savedCastPos = d.Position
+                                                break
+                                        end
+                                end
                         end
                 end
-        end)
-        table.insert(State.fishConns, soundConn)
+                -- Fallback: use player position if bobber position not found
+                if not savedCastPos then
+                        local char = LocalPlayer.Character
+                        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                        savedCastPos = hrp and hrp.Position or getCastPosition()
+                end
+                print("[AutoFish] Player cast detected! Saved position: " .. tostring(savedCastPos))
+                return true
+        end
 
-        -- MAIN LOOP: detect bite -> wait 1.25s -> spam reel until caught -> cast once -> wait 1.25s -> repeat
+        -- Main loop
         State.fishThread = task.spawn(function()
+                -- PHASE 1: Wait for player to cast manually (do nothing until then)
+                if not waitForPlayerCast() then return end
+
+                -- Now we're in full auto mode
                 while State.autoFish do
-                        -- If bite detected, start the reel sequence
-                        if biteDetected and not isReeling then
-                                isReeling = true
-                                task.spawn(function()
-                                        -- Step 1: Wait 1.25 seconds after bite detected
-                                        print("[AutoFish] Bite detected - waiting 1.25s before reeling...")
-                                        if FishStatus then
-                                                FishStatus.Text = "Bite! Waiting 1.25s..."
-                                                FishStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
-                                        end
-                                        task.wait(1.25)
-
-                                        -- Step 2: Spam reel until fish is caught (or 10s timeout)
-                                        if FishStatus then
-                                                FishStatus.Text = "Spamming reel..."
-                                                FishStatus.TextColor3 = Color3.fromRGB(255, 120, 120)
-                                        end
-                                        fishCaught = false
-                                        local reelStart = tick()
-                                        local reelCount = 0
-                                        while State.autoFish and not fishCaught and (tick() - reelStart) < 10 do
-                                                local rod = findRodTool(State.fishRodName)
-                                                if rod then
-                                                        fireFishingEvent(rod, getCastPosition())
-                                                        reelCount = reelCount + 1
-                                                end
-                                                task.wait(0.1)  -- spam every 0.1s
-                                        end
-                                        print("[AutoFish] Reel complete - fired " .. tostring(reelCount) .. " times | caught: " .. tostring(fishCaught))
-
-                                        -- Step 3: Cast once for next fishing attempt
-                                        task.wait(0.5)
-                                        if State.autoFish then
-                                                local rod = findRodTool(State.fishRodName)
-                                                if rod then
-                                                        fireFishingEvent(rod, getCastPosition())
-                                                        print("[AutoFish] Cast fired")
-                                                end
-                                        end
-
-                                        -- Step 4: Wait 1.25 seconds before listening again
-                                        if FishStatus then
-                                                FishStatus.Text = "Waiting 1.25s..."
-                                                FishStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
-                                        end
-                                        task.wait(1.25)
-
-                                        -- Reset and start listening for next bite
-                                        isReeling = false
-                                        biteDetected = false
-                                        if FishStatus then
-                                                FishStatus.Text = "Listening for bite..."
-                                                FishStatus.TextColor3 = Color3.fromRGB(100, 220, 255)
-                                        end
-                                        print("[AutoFish] Ready for next bite")
-                                end)
+                        -- STEP 2: Wait N seconds (full wait — for fish to bite)
+                        FishStatus.Text = "Fishing... waiting " .. string.format("%.2f", State.fishWaitSeconds) .. "s for bite"
+                        FishStatus.TextColor3 = Color3.fromRGB(100, 220, 255)
+                        local waitStart = tick()
+                        while State.autoFish and (tick() - waitStart) < State.fishWaitSeconds do
+                                task.wait(0.1)
                         end
-                        task.wait(0.05)  -- check bite flag frequently
+                        if not State.autoFish then break end
+
+                        -- STEP 3: Spam fishing (catching) for 1 second OR until fish is caught
+                        FishStatus.Text = "Catching (spam 1s)..."
+                        FishStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
+                        fishCaught = false
+                        local catchStart = tick()
+                        local reelCount = 0
+                        while State.autoFish and not fishCaught and (tick() - catchStart) < 1 do
+                                local rod = findRodTool(State.fishRodName)
+                                if rod then
+                                        fireFishingEvent(rod, savedCastPos or getCastPosition())
+                                        reelCount = reelCount + 1
+                                end
+                                task.wait(0.05)  -- 20 fires per second
+                        end
+                        print("[AutoFish] Catch done: fired " .. reelCount .. "x | caught=" .. tostring(fishCaught))
+
+                        -- STEP 4: Cooldown 0.25 seconds
+                        if State.autoFish then
+                                FishStatus.Text = "Cooldown 0.25s..."
+                                FishStatus.TextColor3 = Color3.fromRGB(200, 200, 130)
+                                task.wait(0.25)
+                        end
+
+                        -- STEP 5: Auto-cast at saved position (fire fishing script once)
+                        if State.autoFish then
+                                fishCaught = false
+                                local rod = findRodTool(State.fishRodName)
+                                if rod then
+                                        fireFishingEvent(rod, savedCastPos or getCastPosition())
+                                        print("[AutoFish] Auto-cast at " .. tostring(savedCastPos))
+                                        FishStatus.Text = "Cast! Waiting " .. string.format("%.2f", State.fishWaitSeconds) .. "s..."
+                                        FishStatus.TextColor3 = Color3.fromRGB(100, 220, 255)
+                                end
+                        end
+
+                        -- STEP 6: Back to step 2 (loop continues)
                 end
         end)
 end
@@ -6250,40 +6125,8 @@ local function stopAutoFish()
 end
 
 AutoFishBtn.MouseButton1Click:Connect(function()
-        if State.autoFish then
-                stopAutoFish()
-        else
-                startAutoFish()
-        end
+        if State.autoFish then stopAutoFish() else startAutoFish() end
 end)
-
-FishDiscoveryBtn.MouseButton1Click:Connect(function()
-        if State.fishDiscovery then
-                stopFishDiscovery()
-        else
-                startFishDiscovery()
-        end
-end)
-
--- ================================================================
--- // DETECT SOUND MODE â€” pick which soundId is the bite
--- ================================================================
-
-local function setFishDetectMode(mode)
-        State.fishDetectMode = mode
-        -- Update button colors
-        DetectSwimBtn.BackgroundColor3 = (mode == "swim") and Color3.fromRGB(40, 160, 80) or Color3.fromRGB(60, 60, 80)
-        DetectSwimBtn.TextColor3 = (mode == "swim") and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(220, 220, 240)
-        DetectImpactBtn.BackgroundColor3 = (mode == "impact") and Color3.fromRGB(40, 160, 80) or Color3.fromRGB(60, 60, 80)
-        DetectImpactBtn.TextColor3 = (mode == "impact") and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(220, 220, 240)
-        DetectBothBtn.BackgroundColor3 = (mode == "both") and Color3.fromRGB(40, 160, 80) or Color3.fromRGB(60, 60, 80)
-        DetectBothBtn.TextColor3 = (mode == "both") and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(220, 220, 240)
-        print("[AutoFish] Detect mode set to: " .. mode)
-end
-
-DetectSwimBtn.MouseButton1Click:Connect(function() setFishDetectMode("swim") end)
-DetectImpactBtn.MouseButton1Click:Connect(function() setFishDetectMode("impact") end)
-DetectBothBtn.MouseButton1Click:Connect(function() setFishDetectMode("both") end)
 
 -- ================================================================
 -- // AUTO RIFTS
@@ -6634,26 +6477,31 @@ local function startAutoRifts()
                                 end
                                 task.wait(0.5)
 
-                                -- Step 2b: Wait for NewZone change (rift activated)
-                                newZoneChanged = false
-                                newZoneName = nil
+                                -- Step 2b: Check if dungeon loaded (workspace.DungeonRing.Outer exists)
                                 if RiftsStatus then
-                                        RiftsStatus.Text = "Waiting for NewZone change..."
+                                        RiftsStatus.Text = "Checking for DungeonRing.Outer..."
                                         RiftsStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
                                 end
-                                print("[AutoRifts] Waiting for NewZone change (rift activation)...")
-                                local zoneWaitStart = tick()
-                                while State.autoRifts and not newZoneChanged and (tick() - zoneWaitStart) < 15 do
-                                        task.wait(0.2)
-                                end
-                                if newZoneChanged then
-                                        print("[AutoRifts] Zone changed to: " .. tostring(newZoneName) .. " - rift activated!")
+                                print("[AutoRifts] Checking workspace.DungeonRing.Outer...")
+                                local dungeonRing = workspace:FindFirstChild("DungeonRing")
+                                local dungeonOuter = dungeonRing and dungeonRing:FindFirstChild("Outer")
+                                if not dungeonOuter then
+                                        print("[AutoRifts] DungeonRing.Outer gone - waiting 2s before camp/kill")
                                         if RiftsStatus then
-                                                RiftsStatus.Text = "Zone: " .. tostring(newZoneName) .. " - rift active!"
+                                                RiftsStatus.Text = "Ring gone! Waiting 2s..."
+                                                RiftsStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
+                                        end
+                                        task.wait(2)
+                                        if RiftsStatus then
+                                                RiftsStatus.Text = "Rift active - starting camp/kill"
                                                 RiftsStatus.TextColor3 = Color3.fromRGB(100, 255, 150)
                                         end
                                 else
-                                        print("[AutoRifts] No NewZone change detected after 15s - proceeding anyway")
+                                        print("[AutoRifts] DungeonRing.Outer still exists - rift not activated, retrying")
+                                        if RiftsStatus then
+                                                RiftsStatus.Text = "DungeonRing.Outer found - rift not active"
+                                                RiftsStatus.TextColor3 = Color3.fromRGB(255, 150, 150)
+                                        end
                                 end
                                 task.wait(0.5)
 
@@ -6677,7 +6525,7 @@ local function startAutoRifts()
                                                         RiftsStatus.TextColor3 = Color3.fromRGB(255, 120, 120)
                                                 end
 
-                                                -- Check weapon type â€” if Auto Bow is ON, always use bow
+                                                -- Check weapon type — if Auto Bow is ON, always use bow
                                                 local wType, _ = getEquippedWeaponType()
                                                 if State.autoBow then
                                                         wType = "bow"  -- force bow mode when Auto Bow is ON
@@ -6767,36 +6615,43 @@ local function stopAutoRifts()
         print("[AutoRifts] === STOPPED ===")
 end
 
-AutoRiftsBtn.MouseButton1Click:Connect(function()
-        if State.autoRifts then
-                stopAutoRifts()
-        else
-                startAutoRifts()
+-- Wrapped in its own pcall so a crash earlier in the script (before this point)
+-- can no longer prevent Rifts buttons from being connected.
+local riftsWireOk, riftsWireErr = pcall(function()
+        AutoRiftsBtn.MouseButton1Click:Connect(function()
+                if State.autoRifts then
+                        stopAutoRifts()
+                else
+                        startAutoRifts()
+                end
+        end)
+
+        RiftsRadiusDownBtn.MouseButton1Click:Connect(function()
+                State.riftsRadius = math.max(50, State.riftsRadius - 50)
+                RiftsRadiusLabel.Text = "Mob detect radius: " .. tostring(State.riftsRadius) .. " studs"
+        end)
+
+        RiftsRadiusUpBtn.MouseButton1Click:Connect(function()
+                State.riftsRadius = math.min(5000, State.riftsRadius + 50)
+                RiftsRadiusLabel.Text = "Mob detect radius: " .. tostring(State.riftsRadius) .. " studs"
+        end)
+
+        -- Activation mode handlers
+        local function setRiftsActivationMode(mode)
+                State.riftsActivationMode = mode
+                RiftsMobileBtn.BackgroundColor3 = (mode == "mobile") and Color3.fromRGB(40, 160, 80) or Color3.fromRGB(60, 60, 80)
+                RiftsMobileBtn.TextColor3 = (mode == "mobile") and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(220, 220, 240)
+                RiftsDesktopBtn.BackgroundColor3 = (mode == "desktop") and Color3.fromRGB(40, 160, 80) or Color3.fromRGB(60, 60, 80)
+                RiftsDesktopBtn.TextColor3 = (mode == "desktop") and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(220, 220, 240)
+                print("[AutoRifts] Activation mode: " .. mode)
         end
-end)
 
-RiftsRadiusDownBtn.MouseButton1Click:Connect(function()
-        State.riftsRadius = math.max(50, State.riftsRadius - 50)
-        RiftsRadiusLabel.Text = "Mob detect radius: " .. tostring(State.riftsRadius) .. " studs"
+        RiftsMobileBtn.MouseButton1Click:Connect(function() setRiftsActivationMode("mobile") end)
+        RiftsDesktopBtn.MouseButton1Click:Connect(function() setRiftsActivationMode("desktop") end)
 end)
-
-RiftsRadiusUpBtn.MouseButton1Click:Connect(function()
-        State.riftsRadius = math.min(5000, State.riftsRadius + 50)
-        RiftsRadiusLabel.Text = "Mob detect radius: " .. tostring(State.riftsRadius) .. " studs"
-end)
-
--- Activation mode handlers
-local function setRiftsActivationMode(mode)
-        State.riftsActivationMode = mode
-        RiftsMobileBtn.BackgroundColor3 = (mode == "mobile") and Color3.fromRGB(40, 160, 80) or Color3.fromRGB(60, 60, 80)
-        RiftsMobileBtn.TextColor3 = (mode == "mobile") and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(220, 220, 240)
-        RiftsDesktopBtn.BackgroundColor3 = (mode == "desktop") and Color3.fromRGB(40, 160, 80) or Color3.fromRGB(60, 60, 80)
-        RiftsDesktopBtn.TextColor3 = (mode == "desktop") and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(220, 220, 240)
-        print("[AutoRifts] Activation mode: " .. mode)
+if not riftsWireOk then
+        warn("[Pilgrammed] Rifts button wiring failed: " .. tostring(riftsWireErr))
 end
-
-RiftsMobileBtn.MouseButton1Click:Connect(function() setRiftsActivationMode("mobile") end)
-RiftsDesktopBtn.MouseButton1Click:Connect(function() setRiftsActivationMode("desktop") end)
 
 end) -- end pcall
 
