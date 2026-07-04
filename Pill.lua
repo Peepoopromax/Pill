@@ -125,6 +125,7 @@ local State = {
         bowShootRate = 0.1,     -- seconds between shots
         bowName = "Prism Bow",
         bowThread = nil,
+        bowAutoEquip = false,   -- if false, only shoots when bow already equipped/held
         -- Auto Fishing
         autoFish = false,
         fishDiscovery = false,
@@ -148,7 +149,7 @@ local refreshOreList
 local refreshMobList
 
 -- ================================================================
--- // SECTION 1: EARLY UI (NO PCALL — always works even if rest crashes)
+-- // SECTION 1: EARLY UI (NO PCALL â€” always works even if rest crashes)
 -- ================================================================
 
 local ScreenGui = Instance.new("ScreenGui")
@@ -228,7 +229,7 @@ end)
 print("[Pilgrammed] Toggle UI ready!")
 
 -- ================================================================
--- // SECTION 2: ALL UI ELEMENTS (NO PCALL — always created)
+-- // SECTION 2: ALL UI ELEMENTS (NO PCALL â€” always created)
 -- ================================================================
 
 -- Title bar
@@ -1844,9 +1845,39 @@ do
         c.Parent = AutoBowBtn
 end
 
+-- Auto-Equip toggle: ON = auto-equip bow from backpack, OFF = only shoot if already held
+local BowAutoEquipBtn = Instance.new("TextButton")
+BowAutoEquipBtn.Size = UDim2.new(1, 0, 0, 28)
+BowAutoEquipBtn.Position = UDim2.new(0, 0, 0, 784)
+BowAutoEquipBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+BowAutoEquipBtn.BorderSizePixel = 0
+BowAutoEquipBtn.Text = "Auto-Equip: OFF (manual hold only)"
+BowAutoEquipBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
+BowAutoEquipBtn.Font = Enum.Font.GothamBold
+BowAutoEquipBtn.TextSize = 12
+BowAutoEquipBtn.AutoButtonColor = false
+BowAutoEquipBtn.Parent = MobPage
+
+do
+        local c = Instance.new("UICorner")
+        c.CornerRadius = UDim.new(0, 8)
+        c.Parent = BowAutoEquipBtn
+end
+
+BowAutoEquipBtn.MouseButton1Click:Connect(function()
+        State.bowAutoEquip = not State.bowAutoEquip
+        if State.bowAutoEquip then
+                BowAutoEquipBtn.Text = "Auto-Equip: ON"
+                BowAutoEquipBtn.BackgroundColor3 = Color3.fromRGB(60, 140, 90)
+        else
+                BowAutoEquipBtn.Text = "Auto-Equip: OFF (manual hold only)"
+                BowAutoEquipBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+        end
+end)
+
 local BowStatus = Instance.new("TextLabel")
 BowStatus.Size = UDim2.new(1, 0, 0, 16)
-BowStatus.Position = UDim2.new(0, 0, 0, 784)
+BowStatus.Position = UDim2.new(0, 0, 0, 818)
 BowStatus.BackgroundTransparency = 1
 BowStatus.Text = "Idle"
 BowStatus.TextColor3 = Color3.fromRGB(140, 150, 180)
@@ -2345,7 +2376,7 @@ local RiftsBtn = createSidebarButton("Rifts", "R")
 local allSideBtns = {PlayerBtn, AutoBtn, MobBtn, SettingsBtn, JunkpitsBtn, RiftsBtn}
 setActiveSidebarBtn(PlayerBtn, allSideBtns)
 
--- // SIDEBAR NAVIGATION (outside pcall — basic page switching always works)
+-- // SIDEBAR NAVIGATION (outside pcall â€” basic page switching always works)
 PlayerBtn.MouseButton1Click:Connect(function()
         setActiveSidebarBtn(PlayerBtn, allSideBtns)
         showPage("Player")
@@ -2381,7 +2412,7 @@ end)
 print("[Pilgrammed] UI elements created!")
 
 -- ================================================================
--- // SECTION 3: LOGIC CODE (IN PCALL — errors don't kill UI)
+-- // SECTION 3: LOGIC CODE (IN PCALL â€” errors don't kill UI)
 -- ================================================================
 
 local ok, err = pcall(function()
@@ -2492,7 +2523,7 @@ local function flyUnderAndFacePart(part)
         end
 end
 
--- // NOCLIP (cached — same pattern as mob farm, avoids GetDescendants every frame)
+-- // NOCLIP (cached â€” same pattern as mob farm, avoids GetDescendants every frame)
 local _noclipCache = {}
 local _noclipCacheTime = 0
 local function startNoclip()
@@ -2608,7 +2639,7 @@ local function watchNPC(humanoid)
 
         humanoid.AnimationPlayed:Connect(function(track)
                 if not State.autoParry then return end
-                -- Note: do NOT check State.isBlocking here — we want to detect new hits
+                -- Note: do NOT check State.isBlocking here â€” we want to detect new hits
                 -- even while blocking, so we can extend the hold
 
                 local anim = track.Animation
@@ -2627,7 +2658,7 @@ local function watchNPC(humanoid)
                         or name:find("action") or name:find("wind") or name:find("spin")
 
                 if isAttack then
-                        -- Re-check range NOW, at the moment of the swing — not just when the
+                        -- Re-check range NOW, at the moment of the swing â€” not just when the
                         -- mob was first spotted. If it walked out of PARRY_RANGE, skip it.
                         local char = LocalPlayer.Character
                         local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -2698,7 +2729,7 @@ local function onMobSpawnedForParry(mob)
         local hrp = char:FindFirstChild("HumanoidRootPart")
         local eHrp = mob:FindFirstChild("HumanoidRootPart")
         if not hrp or not eHrp then
-                -- Mob might not have HRP yet — wait briefly and retry once
+                -- Mob might not have HRP yet â€” wait briefly and retry once
                 task.spawn(function()
                         task.wait(0.3)
                         if not State.autoParry then return end
@@ -2771,7 +2802,7 @@ local function startAutoParry()
 
         local layersActive = 0
 
-        -- ===== LAYER 1: AttackWarning Remote (server warns BEFORE hit — best timing) =====
+        -- ===== LAYER 1: AttackWarning Remote (server warns BEFORE hit â€” best timing) =====
         local awRemote = getAttackWarningRemote()
         if awRemote and awRemote:IsA("RemoteEvent") then
                 State.attackWarningConn = awRemote.OnClientEvent:Connect(function(...)
@@ -2798,7 +2829,7 @@ local function startAutoParry()
         print("[AutoParry] Layer 2 ACTIVE: Animation watcher")
 
         -- ===== LAYER 3: Health-drop detector (most reliable fallback) =====
-        -- If our health drops, we got hit — block immediately to catch the next hit
+        -- If our health drops, we got hit â€” block immediately to catch the next hit
         -- Works regardless of remote/animation detection
         local char = LocalPlayer.Character
         local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -2808,9 +2839,9 @@ local function startAutoParry()
                 State.parryHealthConn = hum.HealthChanged:Connect(function(newHealth)
                         if not State.autoParry then return end
                         if newHealth < State.lastHealth then
-                                -- Health dropped — we took a hit, block immediately for the next one
+                                -- Health dropped â€” we took a hit, block immediately for the next one
                                 local dmg = State.lastHealth - newHealth
-                                print("[AutoParry] Layer 3: Health drop " .. string.format("%.1f", dmg) .. " — blocking!")
+                                print("[AutoParry] Layer 3: Health drop " .. string.format("%.1f", dmg) .. " â€” blocking!")
                                 doParry("HealthDrop")
                         end
                         State.lastHealth = newHealth
@@ -2884,7 +2915,7 @@ end
 -- (Legacy getMobNames / getAllMobsOfName were replaced by recursive versions below)
 
 -- ================================================================
--- // MOB SCANNING HELPERS (recursive — handles both workspace.Mobs.Area.Mob AND workspace.Mobs.Mob)
+-- // MOB SCANNING HELPERS (recursive â€” handles both workspace.Mobs.Area.Mob AND workspace.Mobs.Mob)
 -- ================================================================
 
 -- Recursively iterate all descendants of `parent` that are Models with Humanoids
@@ -3075,7 +3106,7 @@ local function flyToMob(mob)
         end
 end
 
--- Get the next enabled attack type (cycles through Light→Heavy→Tech→Light...)
+-- Get the next enabled attack type (cycles through Lightâ†’Heavyâ†’Techâ†’Light...)
 -- Returns the attack type number (1, 2, or 3) to fire, or nil if none enabled
 local function getNextAttackType()
         -- Find first enabled attack type starting from current
@@ -3104,7 +3135,7 @@ local function attackMob()
         local char = LocalPlayer.Character
         if not char then return end
 
-        -- If Auto Bow is ON, ONLY use bow — never switch to melee weapons
+        -- If Auto Bow is ON, ONLY use bow â€” never switch to melee weapons
         if State.autoBow then
                 -- Find equipped bow (has "Shoot" remote)
                 local bowWeapon = nil
@@ -3464,7 +3495,7 @@ local function updateCampCircle()
         State.campCirclePart = part
 end
 
--- Find nearest alive mob within camp radius (recursive — handles all mob nesting depths)
+-- Find nearest alive mob within camp radius (recursive â€” handles all mob nesting depths)
 local function findCampTarget()
         if not State.campPoint then return nil end
         return findNearestMobToPoint(State.campPoint, State.campRadius)
@@ -3533,7 +3564,7 @@ local function tpToCampPoint()
         hrp.CFrame = CFrame.new(target)
 end
 
--- Camp attack reuses attackMob() — set currentMob to campTargetMob before calling
+-- Camp attack reuses attackMob() â€” set currentMob to campTargetMob before calling
 local function campAttack()
         if not State.campTargetMob then return end
         local prev = State.currentMob
@@ -3609,7 +3640,7 @@ local function startCampFarm()
         print("[CampFarm] Started. Point: " .. tostring(State.campPoint) .. " | Radius: " .. tostring(State.campRadius))
 
         -- ===== SINGLE MASTER HEARTBEAT for camp farm =====
-        -- Strategy: TP to mob → attack → when dead/missing → TP back to camp point ONCE → fall (gravity)
+        -- Strategy: TP to mob â†’ attack â†’ when dead/missing â†’ TP back to camp point ONCE â†’ fall (gravity)
         State.campMainConn = RunService.Heartbeat:Connect(function()
                 if not State.autoCampFarming then return end
                 local now = tick()
@@ -3670,7 +3701,7 @@ local function startCampFarm()
                                 end
                         end
                 else
-                        -- No target — TP back to camp point ONCE (not every frame)
+                        -- No target â€” TP back to camp point ONCE (not every frame)
                         if not returnedToCenter then
                                 returnedToCenter = true
                                 tpToCampPoint()
@@ -4639,6 +4670,7 @@ local function findBowShootRemote(bowName)
         if bow and bow:FindFirstChild("Shoot") then
                 return bow.Shoot
         end
+        if not State.bowAutoEquip then return nil end -- toggle off: require manual equip/hold
         -- Check backpack (need to equip it first)
         local backpack = LocalPlayer:FindFirstChild("Backpack")
         if backpack then
@@ -4755,7 +4787,7 @@ BowRateUpBtn.MouseButton1Click:Connect(function()
 end)
 
 -- ================================================================
--- // KILL SCRIPT — stops everything and destroys UI
+-- // KILL SCRIPT â€” stops everything and destroys UI
 -- ================================================================
 
 local function killScript()
@@ -5184,7 +5216,7 @@ local function startCronoKeyCollect()
                                 -- Still continue to try Exit
                         end
 
-                        -- Phase 1: TP to each level's Firewall (fast — just TP and tiny wait)
+                        -- Phase 1: TP to each level's Firewall (fast â€” just TP and tiny wait)
                         for _, level in ipairs(levels) do
                                 if not State.autoCronoKey then break end
                                 local firewall = level:FindFirstChild("Firewall")
@@ -5198,7 +5230,7 @@ local function startCronoKeyCollect()
                                 end
                         end
 
-                        -- Phase 2: TP to each level's Keys (fast — TP each key with brief wait)
+                        -- Phase 2: TP to each level's Keys (fast â€” TP each key with brief wait)
                         for _, level in ipairs(levels) do
                                 if not State.autoCronoKey then break end
                                 local keys = getAllKeys(level)
@@ -5269,7 +5301,7 @@ local function startCronoKeyCollect()
                                 end
                         end
 
-                        -- Done — stop
+                        -- Done â€” stop
                         State.autoCronoKey = false
                         CronoKeyBtn.Text = "Auto Crono's Crazy Challenge Key Collect"
                         CronoKeyBtn.BackgroundColor3 = Color3.fromRGB(180, 100, 40)
@@ -5316,7 +5348,7 @@ local DELETE_TARGET_NAMES = {
         "SniperOrb",     -- Level21 and possibly others
 }
 
--- Delete target aggressively — try multiple strategies because server-owned instances
+-- Delete target aggressively â€” try multiple strategies because server-owned instances
 -- sometimes resist client-side Destroy()
 local function deleteIfExists(target)
         if not target or not target.Parent then return false end
@@ -5681,7 +5713,7 @@ end)
 -- // AUTO FISHING (with Discovery Mode to find the fishing signal)
 -- ================================================================
 
--- Find the rod tool (equipped or in backpack) — case-insensitive name match
+-- Find the rod tool (equipped or in backpack) â€” case-insensitive name match
 local function findRodTool(rodName)
         if not rodName or rodName == "" then return nil end
         local rodLower = rodName:lower()
@@ -5988,7 +6020,7 @@ local function startAutoFish()
         FishStatus.Text = "Waiting for you to cast..."
         FishStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
         print("[AutoFish] === STARTED === | Rod: " .. State.fishRodName)
-        print("[AutoFish] CAST YOUR LINE manually — script will detect it and go full auto!")
+        print("[AutoFish] CAST YOUR LINE manually â€” script will detect it and go full auto!")
 
         local catchCount = 0
         local fishCaught = false
@@ -6011,10 +6043,61 @@ local function startAutoFish()
                 end
         end
 
-        -- Helper: detect if player is currently fishing (Bobber exists in workspace)
+        -- Also detect catches via workspace.Chests.Fishing (fish sometimes drops as a chest, not Loot event)
+        local chestsFishing = workspace:FindFirstChild("Chests") and workspace.Chests:FindFirstChild("Fishing")
+        if chestsFishing then
+                local chestConn = chestsFishing.ChildAdded:Connect(function(child)
+                        catchCount = catchCount + 1
+                        fishCaught = true
+                        print("[AutoFish] CAUGHT #" .. catchCount .. " (chest): " .. child.Name)
+                        FishStatus.Text = "Caught #" .. catchCount .. " (chest)"
+                        FishStatus.TextColor3 = Color3.fromRGB(100, 255, 150)
+                end)
+                table.insert(State.fishConns, chestConn)
+        end
+
+        -- Bait/bobber detector: name-pattern + 15 stud range, event-cached (not polled) since
+        -- cast/catch fire the SAME remote â€” physical presence is the only reliable "in/out" signal
+        local BAIT_RANGE = 15
+        local BAIT_PATTERNS = {"bobber", "bait", "float", "cork", "hook", "lure", "line"}
+        local cachedBait = nil
+
+        local function baitPos(inst)
+                if inst:IsA("BasePart") then return inst.Position end
+                if inst.PrimaryPart then return inst.PrimaryPart.Position end
+                local p = inst:FindFirstChildWhichIsA("BasePart", true)
+                return p and p.Position
+        end
+
+        local function nearPlayer(pos)
+                local char = LocalPlayer.Character
+                local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                return hrp and pos and (pos - hrp.Position).Magnitude <= BAIT_RANGE
+        end
+
+        local function matchesBaitName(n)
+                n = n:lower()
+                for _, pat in ipairs(BAIT_PATTERNS) do
+                        if n:find(pat, 1, true) then return true end
+                end
+                return false
+        end
+
+        local function tryCacheBait(inst)
+                if not cachedBait and matchesBaitName(inst.Name) then
+                        local pos = baitPos(inst)
+                        if pos and nearPlayer(pos) then cachedBait = inst end
+                end
+        end
+        -- scan what's already there, then track live add/remove
+        for _, d in ipairs(workspace:GetDescendants()) do tryCacheBait(d) end
+        table.insert(State.fishConns, workspace.DescendantAdded:Connect(tryCacheBait))
+        table.insert(State.fishConns, workspace.DescendantRemoving:Connect(function(inst)
+                if inst == cachedBait then cachedBait = nil end
+        end))
+
         local function isPlayerFishing()
-                local bobber = workspace:FindFirstChild("Bobber")
-                return bobber ~= nil
+                return cachedBait ~= nil and cachedBait.Parent ~= nil
         end
 
         -- Helper: wait for player to cast (Bobber appears)
@@ -6026,22 +6109,9 @@ local function startAutoFish()
                         task.wait(0.1)
                 end
                 if not State.autoFish then return false end
-                -- Save the cast position (where the bobber is)
-                local bobber = workspace:FindFirstChild("Bobber")
-                if bobber then
-                        if bobber:IsA("BasePart") then
-                                savedCastPos = bobber.Position
-                        elseif bobber:IsA("Model") then
-                                local pp = bobber.PrimaryPart or bobber:FindFirstChildWhichIsA("BasePart")
-                                if pp then savedCastPos = pp.Position end
-                        elseif bobber:IsA("Folder") then
-                                for _, d in ipairs(bobber:GetDescendants()) do
-                                        if d:IsA("BasePart") then
-                                                savedCastPos = d.Position
-                                                break
-                                        end
-                                end
-                        end
+                -- Save the cast position from the detected bait model
+                if cachedBait then
+                        savedCastPos = baitPos(cachedBait)
                 end
                 -- Fallback: use player position if bobber position not found
                 if not savedCastPos then
@@ -6060,7 +6130,7 @@ local function startAutoFish()
 
                 -- Now we're in full auto mode
                 while State.autoFish do
-                        -- STEP 2: Wait N seconds (full wait — for fish to bite)
+                        -- STEP 2: Wait N seconds (full wait â€” for fish to bite)
                         FishStatus.Text = "Fishing... waiting " .. string.format("%.2f", State.fishWaitSeconds) .. "s for bite"
                         FishStatus.TextColor3 = Color3.fromRGB(100, 220, 255)
                         local waitStart = tick()
@@ -6069,19 +6139,19 @@ local function startAutoFish()
                         end
                         if not State.autoFish then break end
 
-                        -- STEP 3: Spam fishing (catching) for 1 second OR until fish is caught
-                        FishStatus.Text = "Catching (spam 1s)..."
+                        -- STEP 3: Spam fishing (catching) max 5x @ 0.15s cooldown, stop early if caught (Loot or chest)
+                        FishStatus.Text = "Catching..."
                         FishStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
                         fishCaught = false
-                        local catchStart = tick()
                         local reelCount = 0
-                        while State.autoFish and not fishCaught and (tick() - catchStart) < 1 do
+                        while State.autoFish and not fishCaught and reelCount < 5 and isPlayerFishing() do
                                 local rod = findRodTool(State.fishRodName)
                                 if rod then
                                         fireFishingEvent(rod, savedCastPos or getCastPosition())
                                         reelCount = reelCount + 1
                                 end
-                                task.wait(0.05)  -- 20 fires per second
+                                if fishCaught then break end
+                                task.wait(0.15)
                         end
                         print("[AutoFish] Catch done: fired " .. reelCount .. "x | caught=" .. tostring(fishCaught))
 
@@ -6092,8 +6162,9 @@ local function startAutoFish()
                                 task.wait(0.25)
                         end
 
-                        -- STEP 5: Auto-cast at saved position (fire fishing script once)
-                        if State.autoFish then
+                        -- STEP 5: Auto-cast â€” ONLY if bait isn't already in water (same remote as catch, so
+                        -- physical check prevents firing "cast" while actually still mid-catch = infinite stall)
+                        if State.autoFish and not isPlayerFishing() then
                                 fishCaught = false
                                 local rod = findRodTool(State.fishRodName)
                                 if rod then
@@ -6525,7 +6596,7 @@ local function startAutoRifts()
                                                         RiftsStatus.TextColor3 = Color3.fromRGB(255, 120, 120)
                                                 end
 
-                                                -- Check weapon type — if Auto Bow is ON, always use bow
+                                                -- Check weapon type â€” if Auto Bow is ON, always use bow
                                                 local wType, _ = getEquippedWeaponType()
                                                 if State.autoBow then
                                                         wType = "bow"  -- force bow mode when Auto Bow is ON
