@@ -147,2274 +147,911 @@ local State = {
 -- // FORWARD DECLARATIONS (set by logic code inside pcall, used by early UI handlers)
 local refreshOreList
 local refreshMobList
+-- ================================================================
+-- // SECTION 1+2 (REBUILT): "AURORA" PREMIUM UI SYSTEM
+-- ------------------------------------------------------------------
+-- Everything below is a from-scratch UI rebuild. It creates the exact
+-- same set of global element names the automation logic (Section 3,
+-- untouched below) reads and writes â€” so every feature keeps working â€”
+-- but the construction, styling, layout and animation are entirely new.
+-- ================================================================
+
+local TweenService = game:GetService("TweenService")
 
 -- ================================================================
--- // SECTION 1: EARLY UI (NO PCALL â€” always works even if rest crashes)
+-- // DESIGN TOKENS
+-- ================================================================
+local Theme = {
+	Backdrop    = Color3.fromRGB(14, 14, 16),   -- behind the panel (drag shadow)
+	Base        = Color3.fromRGB(28, 28, 30),   -- #1C1C1E â€” main panel
+	Sidebar     = Color3.fromRGB(20, 20, 22),
+	Card        = Color3.fromRGB(36, 36, 39),
+	Elevated    = Color3.fromRGB(48, 48, 52),   -- resting buttons / inputs
+	Surface     = Color3.fromRGB(23, 23, 26),   -- scroll frame wells
+	Track       = Color3.fromRGB(56, 56, 60),
+	Accent      = Color3.fromRGB(76, 217, 100), -- #4CD964 â€” mint green
+	AccentText  = Color3.fromRGB(8, 26, 14),
+	Text        = Color3.fromRGB(255, 255, 255),
+	TextDim     = Color3.fromRGB(160, 160, 168),
+	TextFaint   = Color3.fromRGB(102, 102, 110),
+	Danger      = Color3.fromRGB(255, 69, 58),
+	Stroke      = Color3.fromRGB(255, 255, 255),
+	Font        = Enum.Font.Gotham,
+	FontBold    = Enum.Font.GothamBold,
+}
+
+-- ================================================================
+-- // CORE HELPERS
 -- ================================================================
 
+-- Compact instance constructor â€” cuts boilerplate vs. one-property-per-line.
+local function new(className, props, parent)
+	local inst = Instance.new(className)
+	for k, v in pairs(props or {}) do
+		inst[k] = v
+	end
+	if parent then inst.Parent = parent end
+	return inst
+end
+
+local function corner(inst, radius)
+	return new("UICorner", { CornerRadius = UDim.new(0, radius) }, inst)
+end
+
+local function stroke(inst, color, thickness, transparency)
+	return new("UIStroke", {
+		Color = color, Thickness = thickness or 1,
+		Transparency = transparency or 0.85,
+	}, inst)
+end
+
+local function pad(inst, l, t, r, b)
+	return new("UIPadding", {
+		PaddingLeft = UDim.new(0, l or 0), PaddingTop = UDim.new(0, t or 0),
+		PaddingRight = UDim.new(0, r or 0), PaddingBottom = UDim.new(0, b or 0),
+	}, inst)
+end
+
+-- Short tween helper. Returns the Tween in case the caller wants to chain.
+local function tw(inst, time, props, style, dir)
+	local info = TweenInfo.new(time, style or Enum.EasingStyle.Quint, dir or Enum.EasingDirection.Out)
+	local t = TweenService:Create(inst, info, props)
+	t:Play()
+	return t
+end
+
+-- Universal hover/press feedback. Uses an overlay + UIScale so it NEVER
+-- touches BackgroundColor3/Text â€” those stay fully owned by the feature
+-- logic, which sets its own on/off/active colors independently.
+local function polish(btn, opts)
+	opts = opts or {}
+	local hl = new("Frame", {
+		Name = "Highlight", BackgroundColor3 = Color3.new(1, 1, 1),
+		BackgroundTransparency = 1, Size = UDim2.new(1, 0, 1, 0),
+		ZIndex = (btn.ZIndex or 1) + 1, Parent = btn,
+	})
+	hl.Active = false
+	corner(hl, opts.radius or 10)
+	local scale
+	if not opts.noScale then
+		scale = new("UIScale", { Scale = 1 }, btn)
+	end
+	btn.MouseEnter:Connect(function()
+		tw(hl, 0.15, { BackgroundTransparency = 0.90 })
+		if scale then tw(scale, 0.15, { Scale = 1.02 }) end
+	end)
+	btn.MouseLeave:Connect(function()
+		tw(hl, 0.15, { BackgroundTransparency = 1 })
+		if scale then tw(scale, 0.15, { Scale = 1 }) end
+	end)
+	btn.MouseButton1Down:Connect(function()
+		tw(hl, 0.08, { BackgroundTransparency = 0.80 })
+		if scale then tw(scale, 0.08, { Scale = 0.97 }) end
+	end)
+	btn.MouseButton1Up:Connect(function()
+		if scale then tw(scale, 0.12, { Scale = 1.02 }) end
+	end)
+	return hl
+end
+
+-- ================================================================
+-- // VECTOR ICON LIBRARY (zero external assets â€” always renders)
+-- ================================================================
+local Icons = {}
+
+local function shape(parent, xS, yS, wPx, hPx, color, cornerUDim, rot)
+	local s = new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(xS, 0, yS, 0),
+		Size = UDim2.new(0, wPx, 0, hPx), BackgroundColor3 = color,
+		BorderSizePixel = 0, Rotation = rot or 0,
+	}, parent)
+	if cornerUDim then corner(s, cornerUDim) end
+	return s
+end
+
+local function iconBase(parent, sz)
+	return new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(0, sz, 0, sz) }, parent)
+end
+
+function Icons.player(parent, sz, color) -- Player page
+	local f = iconBase(parent, sz)
+	local head = shape(f, 0.5, 0.28, sz * 0.34, sz * 0.34, color, sz)
+	local body = shape(f, 0.5, 0.80, sz * 0.60, sz * 0.42, color, sz * 0.18)
+	return f, { head, body }
+end
+
+function Icons.diamond(parent, sz, color) -- Auto (mining/loot) page
+	local f = iconBase(parent, sz)
+	local d = shape(f, 0.5, 0.5, sz * 0.5, sz * 0.5, color, 3)
+	d.Rotation = 45
+	return f, { d }
+end
+
+function Icons.cross(parent, sz, color) -- Mob (combat) page
+	local f = iconBase(parent, sz)
+	local a = shape(f, 0.5, 0.5, sz * 0.62, sz * 0.15, color, 3, 45)
+	local b = shape(f, 0.5, 0.5, sz * 0.62, sz * 0.15, color, 3, -45)
+	return f, { a, b }
+end
+
+function Icons.gear(parent, sz, color) -- Settings page
+	local f = iconBase(parent, sz)
+	local a = shape(f, 0.5, 0.5, sz * 0.62, sz * 0.14, color, 2, 0)
+	local b = shape(f, 0.5, 0.5, sz * 0.62, sz * 0.14, color, 2, 60)
+	local c = shape(f, 0.5, 0.5, sz * 0.62, sz * 0.14, color, 2, 120)
+	local hole = shape(f, 0.5, 0.5, sz * 0.22, sz * 0.22, Theme.Sidebar, sz)
+	return f, { a, b, c }, hole
+end
+
+function Icons.trash(parent, sz, color) -- Junkpits page
+	local f = iconBase(parent, sz)
+	local body = shape(f, 0.5, 0.60, sz * 0.46, sz * 0.44, color, 4)
+	local lid = shape(f, 0.5, 0.30, sz * 0.60, sz * 0.12, color, 2)
+	return f, { body, lid }
+end
+
+function Icons.portal(parent, sz, color) -- Rifts page
+	local f = iconBase(parent, sz)
+	local ring = shape(f, 0.5, 0.5, sz * 0.66, sz * 0.66, color, sz)
+	local hole = shape(f, 0.5, 0.5, sz * 0.30, sz * 0.30, Theme.Sidebar, sz)
+	return f, { ring }, hole
+end
+
+function Icons.close(parent, sz, color)
+	local f = iconBase(parent, sz)
+	local a = shape(f, 0.5, 0.5, sz * 0.72, sz * 0.12, color, 2, 45)
+	local b = shape(f, 0.5, 0.5, sz * 0.72, sz * 0.12, color, 2, -45)
+	return f, { a, b }
+end
+
+function Icons.menu(parent, sz, color)
+	local f = iconBase(parent, sz)
+	local a = shape(f, 0.5, 0.30, sz * 0.6, sz * 0.10, color, 2)
+	local b = shape(f, 0.5, 0.5, sz * 0.6, sz * 0.10, color, 2)
+	local c = shape(f, 0.5, 0.70, sz * 0.6, sz * 0.10, color, 2)
+	return f, { a, b, c }
+end
+
+-- ================================================================
+-- // ROOT CONTAINER
+-- ================================================================
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "OreMinerGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 ScreenGui.Parent = PlayerGui
 
-local ToggleButton = Instance.new("TextButton")
-ToggleButton.Name = "ToggleButton"
-ToggleButton.Size = UDim2.new(0, 50, 0, 50)
-ToggleButton.Position = UDim2.new(1, -70, 0, 20)
-ToggleButton.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
-ToggleButton.BorderSizePixel = 0
-ToggleButton.Text = "[M]"
-ToggleButton.TextColor3 = Color3.fromRGB(200, 220, 255)
-ToggleButton.TextScaled = true
-ToggleButton.Font = Enum.Font.GothamBold
-ToggleButton.AutoButtonColor = false
-ToggleButton.ZIndex = 100
-ToggleButton.Parent = ScreenGui
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 8)
-        corner.Parent = ToggleButton
-end
-
-local ToggleStroke = Instance.new("UIStroke")
-ToggleStroke.Color = Color3.fromRGB(100, 180, 255)
-ToggleStroke.Thickness = 1.5
-ToggleStroke.Parent = ToggleButton
-
-local MainFrame = Instance.new("Frame")
-MainFrame.Name = "MainFrame"
-MainFrame.Size = UDim2.new(0, 420, 0, 480)
-MainFrame.Position = UDim2.new(0.5, -210, 0.5, -240)
-MainFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 26)
-MainFrame.BorderSizePixel = 0
-MainFrame.Active = true
-MainFrame.Visible = false
-MainFrame.ZIndex = 50
-MainFrame.Parent = ScreenGui
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 12)
-        corner.Parent = MainFrame
-end
-
-local MainStroke = Instance.new("UIStroke")
-MainStroke.Color = Color3.fromRGB(80, 140, 255)
-MainStroke.Thickness = 1.5
-MainStroke.Parent = MainFrame
-
--- Mobile: Toggle via button click
-ToggleButton.MouseButton1Click:Connect(function()
-        MainFrame.Visible = not MainFrame.Visible
-        if MainFrame.Visible then
-                pcall(function() if refreshOreList then refreshOreList() end end)
-                pcall(function() if refreshMobList then refreshMobList() end end)
-        end
-end)
-
--- Desktop: Toggle via M key
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-        if gameProcessed then return end
-        if input.KeyCode == Enum.KeyCode.M then
-                MainFrame.Visible = not MainFrame.Visible
-                if MainFrame.Visible then
-                        pcall(function() if refreshOreList then refreshOreList() end end)
-                        pcall(function() if refreshMobList then refreshMobList() end end)
-                end
-        end
-end)
-
-print("[Pilgrammed] Toggle UI ready!")
+-- ================================================================
+-- // FLOATING TOGGLE BUTTON
+-- ================================================================
+local ToggleButton = new("TextButton", {
+	Name = "ToggleButton", Size = UDim2.new(0, 52, 0, 52),
+	Position = UDim2.new(1, -68, 0, 24), BackgroundColor3 = Theme.Base,
+	AutoButtonColor = false, BorderSizePixel = 0, Text = "", ZIndex = 100,
+}, ScreenGui)
+corner(ToggleButton, 26)
+stroke(ToggleButton, Theme.Accent, 1.5, 0.55)
+new("UIAspectRatioConstraint", { AspectRatio = 1 }, ToggleButton)
+local toggleIconHolder = new("Frame", {
+	Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(0.5, 0, 0.5, 0),
+	AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1,
+}, ToggleButton)
+local _, toggleIconParts = Icons.menu(toggleIconHolder, 20, Theme.Accent)
+polish(ToggleButton)
 
 -- ================================================================
--- // SECTION 2: ALL UI ELEMENTS (NO PCALL â€” always created)
+-- // MAIN WINDOW (CanvasGroup => free rounded clipping + fade animation)
 -- ================================================================
+local MainFrame = new("CanvasGroup", {
+	Name = "MainFrame", AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.new(0.5, 0, 0.5, 0), Size = UDim2.new(0.38, 0, 0.72, 0),
+	BackgroundColor3 = Theme.Base, BorderSizePixel = 0, Active = true,
+	Visible = true, GroupTransparency = 1, ZIndex = 50,
+}, ScreenGui)
+corner(MainFrame, 16)
+stroke(MainFrame, Theme.Accent, 1, 0.75)
+new("UISizeConstraint", { MinSize = Vector2.new(340, 460), MaxSize = Vector2.new(560, 720) }, MainFrame)
+local MainFrameScale = new("UIScale", { Scale = 0.9 }, MainFrame)
+
+-- Soft drop shadow behind the panel (no external image asset needed).
+-- Parented to ScreenGui (siblings of MainFrame), so its bounds are kept in
+-- sync with MainFrame's actual rendered pixels rather than guessed via Scale.
+local Shadow = new("Frame", {
+	AnchorPoint = Vector2.new(0, 0), BackgroundColor3 = Theme.Backdrop,
+	BackgroundTransparency = 0.45, BorderSizePixel = 0, ZIndex = 49,
+}, ScreenGui)
+corner(Shadow, 20)
+local function syncShadow()
+	Shadow.Size = UDim2.new(0, MainFrame.AbsoluteSize.X + 16, 0, MainFrame.AbsoluteSize.Y + 16)
+	Shadow.Position = UDim2.new(0, MainFrame.AbsolutePosition.X - 8, 0, MainFrame.AbsolutePosition.Y - 2)
+end
+MainFrame:GetPropertyChangedSignal("AbsoluteSize"):Connect(syncShadow)
+MainFrame:GetPropertyChangedSignal("AbsolutePosition"):Connect(syncShadow)
+MainFrame:GetPropertyChangedSignal("Visible"):Connect(function()
+	Shadow.Visible = MainFrame.Visible
+end)
+syncShadow()
 
 -- Title bar
-local TitleBar = Instance.new("Frame")
-TitleBar.Name = "TitleBar"
-TitleBar.Size = UDim2.new(1, 0, 0, 36)
-TitleBar.BackgroundColor3 = Color3.fromRGB(25, 25, 38)
-TitleBar.BorderSizePixel = 0
-TitleBar.ZIndex = 2
-TitleBar.Parent = MainFrame
+local TitleBar = new("Frame", {
+	Name = "TitleBar", Size = UDim2.new(1, 0, 0, 44),
+	BackgroundColor3 = Theme.Sidebar, BorderSizePixel = 0, ZIndex = 2,
+}, MainFrame)
+local markHolder = new("Frame", {
+	Size = UDim2.new(0, 18, 0, 18), Position = UDim2.new(0, 14, 0.5, 0),
+	AnchorPoint = Vector2.new(0, 0.5), BackgroundTransparency = 1,
+}, TitleBar)
+Icons.diamond(markHolder, 18, Theme.Accent)
+local TitleLabel = new("TextLabel", {
+	Size = UDim2.new(1, -110, 0, 18), Position = UDim2.new(0, 40, 0, 6),
+	BackgroundTransparency = 1, Text = "PILGRAMMED", TextColor3 = Theme.Text,
+	TextXAlignment = Enum.TextXAlignment.Left, Font = Theme.FontBold, TextSize = 14,
+}, TitleBar)
+new("TextLabel", {
+	Size = UDim2.new(1, -110, 0, 14), Position = UDim2.new(0, 40, 0, 23),
+	BackgroundTransparency = 1, Text = "Ore Miner  -  Aurora UI", TextColor3 = Theme.TextFaint,
+	TextXAlignment = Enum.TextXAlignment.Left, Font = Theme.Font, TextSize = 10,
+}, TitleBar)
 
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 12)
-        corner.Parent = TitleBar
-end
+local CloseBtn = new("TextButton", {
+	Size = UDim2.new(0, 28, 0, 28), Position = UDim2.new(1, -38, 0.5, 0),
+	AnchorPoint = Vector2.new(0, 0.5), BackgroundColor3 = Theme.Elevated,
+	AutoButtonColor = false, BorderSizePixel = 0, Text = "",
+}, TitleBar)
+corner(CloseBtn, 14)
+local closeIconHolder = new("Frame", {
+	Size = UDim2.new(0, 12, 0, 12), Position = UDim2.new(0.5, 0, 0.5, 0),
+	AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1,
+}, CloseBtn)
+Icons.close(closeIconHolder, 12, Theme.TextDim)
+polish(CloseBtn, { radius = 14 })
 
-local TitleBarFix = Instance.new("Frame")
-TitleBarFix.Size = UDim2.new(1, 0, 0, 12)
-TitleBarFix.Position = UDim2.new(0, 0, 1, -12)
-TitleBarFix.BackgroundColor3 = Color3.fromRGB(25, 25, 38)
-TitleBarFix.BorderSizePixel = 0
-TitleBarFix.ZIndex = 2
-TitleBarFix.Parent = TitleBar
+-- Sidebar
+local Sidebar = new("Frame", {
+	Name = "Sidebar", Size = UDim2.new(0, 78, 1, -44), Position = UDim2.new(0, 0, 0, 44),
+	BackgroundColor3 = Theme.Sidebar, BorderSizePixel = 0,
+}, MainFrame)
+new("UIListLayout", {
+	Padding = UDim.new(0, 6), HorizontalAlignment = Enum.HorizontalAlignment.Center,
+	SortOrder = Enum.SortOrder.LayoutOrder,
+}, Sidebar)
+pad(Sidebar, 6, 12, 6, 12)
 
-local TitleLabel = Instance.new("TextLabel")
-TitleLabel.Size = UDim2.new(1, -60, 1, 0)
-TitleLabel.Position = UDim2.new(0, 12, 0, 0)
-TitleLabel.BackgroundTransparency = 1
-TitleLabel.Text = "Pilgrammed Miner V2"
-TitleLabel.TextColor3 = Color3.fromRGB(180, 210, 255)
-TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
-TitleLabel.Font = Enum.Font.GothamBold
-TitleLabel.TextSize = 15
-TitleLabel.ZIndex = 3
-TitleLabel.Parent = TitleBar
+-- Content area (also a CanvasGroup -> smooth cross-fade page transitions)
+local ContentArea = new("CanvasGroup", {
+	Name = "ContentArea", Size = UDim2.new(1, -78, 1, -44), Position = UDim2.new(0, 78, 0, 44),
+	BackgroundColor3 = Theme.Base, BackgroundTransparency = 1,
+}, MainFrame)
 
-local CloseBtn = Instance.new("TextButton")
-CloseBtn.Size = UDim2.new(0, 28, 0, 28)
-CloseBtn.Position = UDim2.new(1, -34, 0.5, -14)
-CloseBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
-CloseBtn.Text = "X"
-CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-CloseBtn.Font = Enum.Font.GothamBold
-CloseBtn.TextSize = 13
-CloseBtn.BorderSizePixel = 0
-CloseBtn.ZIndex = 4
-CloseBtn.Parent = TitleBar
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = CloseBtn
-end
-
--- Close button handler (always works)
-CloseBtn.MouseButton1Click:Connect(function()
-        MainFrame.Visible = false
-end)
-
--- LEFT SIDEBAR
-local Sidebar = Instance.new("Frame")
-Sidebar.Name = "Sidebar"
-Sidebar.Size = UDim2.new(0, 90, 1, -36)
-Sidebar.Position = UDim2.new(0, 0, 0, 36)
-Sidebar.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
-Sidebar.BorderSizePixel = 0
-Sidebar.Parent = MainFrame
-
-local SidebarLayout = Instance.new("UIListLayout")
-SidebarLayout.Padding = UDim.new(0, 6)
-SidebarLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-SidebarLayout.VerticalAlignment = Enum.VerticalAlignment.Top
-SidebarLayout.Parent = Sidebar
-
-local SidebarPadding = Instance.new("UIPadding")
-SidebarPadding.PaddingTop = UDim.new(0, 10)
-SidebarPadding.Parent = Sidebar
-
--- CONTENT AREA
-local ContentArea = Instance.new("Frame")
-ContentArea.Name = "ContentArea"
-ContentArea.Size = UDim2.new(1, -90, 1, -36)
-ContentArea.Position = UDim2.new(0, 90, 0, 36)
-ContentArea.BackgroundTransparency = 1
-ContentArea.ClipsDescendants = true
-ContentArea.Parent = MainFrame
-
--- PAGE SYSTEM
 local Pages = {}
 
-local function createSidebarButton(name, icon)
-        local btn = Instance.new("TextButton")
-        btn.Name = name .. "Btn"
-        btn.Size = UDim2.new(0, 74, 0, 50)
-        btn.BackgroundColor3 = Color3.fromRGB(30, 30, 44)
-        btn.BorderSizePixel = 0
-        btn.Text = icon .. "\n" .. name
-        btn.TextColor3 = Color3.fromRGB(160, 180, 220)
-        btn.Font = Enum.Font.GothamBold
-        btn.TextSize = 10
-        btn.AutoButtonColor = false
-        btn.Parent = Sidebar
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, 8)
-        c.Parent = btn
-        return btn
+local function newPage(name)
+	local page = new("ScrollingFrame", {
+		Name = name .. "Page", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1,
+		ScrollBarThickness = 4, ScrollBarImageColor3 = Theme.Accent, ScrollBarImageTransparency = 0.3,
+		CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		Visible = false,
+	}, ContentArea)
+	pad(page, 16, 14, 14, 16)
+	new("UIListLayout", { Padding = UDim.new(0, 14), SortOrder = Enum.SortOrder.LayoutOrder }, page)
+	Pages[name] = page
+	return page
 end
 
-local function setActiveSidebarBtn(activeBtn, allBtns)
-        for _, b in ipairs(allBtns) do
-                b.BackgroundColor3 = Color3.fromRGB(30, 30, 44)
-                b.TextColor3 = Color3.fromRGB(160, 180, 220)
-        end
-        activeBtn.BackgroundColor3 = Color3.fromRGB(50, 90, 180)
-        activeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+-- ================================================================
+-- // CONTENT-BUILDING HELPERS (used across all 6 pages)
+-- ================================================================
+
+local function card(parent, order, titleText, titleColor)
+	local c = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundColor3 = Theme.Card, BorderSizePixel = 0, LayoutOrder = order,
+	}, parent)
+	corner(c, 16)
+	stroke(c, Theme.Stroke, 1, 0.92)
+	pad(c, 16, 14, 16, 14)
+	new("UIListLayout", { Padding = UDim.new(0, 10), SortOrder = Enum.SortOrder.LayoutOrder }, c)
+	if titleText then
+		new("TextLabel", {
+			Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, Text = titleText,
+			Font = Theme.FontBold, TextSize = 13, TextColor3 = titleColor or Theme.Accent,
+			TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 0,
+		}, c)
+	end
+	return c
 end
 
-local function showPage(pageName)
-        for name, frame in pairs(Pages) do
-                frame.Visible = (name == pageName)
-        end
+local function caption(parent, order, text)
+	return new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+		Text = text, Font = Theme.Font, TextSize = 12, TextColor3 = Theme.TextDim,
+		TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true, LayoutOrder = order,
+	}, parent)
 end
 
--- DRAGGING (always works)
--- One shared InputChanged listener instead of one per draggable - prevents connection leak
-local _dragTargets = {}
-UserInputService.InputChanged:Connect(function(input)
-        for _, d in ipairs(_dragTargets) do
-                if input == d.dragInput and d.dragging then
-                        local delta = input.Position - d.dragStart
-                        d.targetFrame.Position = UDim2.new(
-                                d.startPos.X.Scale, d.startPos.X.Offset + delta.X,
-                                d.startPos.Y.Scale, d.startPos.Y.Offset + delta.Y
-                        )
-                end
-        end
-end)
-
-local function makeDraggable(dragHandle, targetFrame, canMoveCheck)
-        local d = {dragging=false, dragStart=nil, startPos=nil, dragInput=nil, targetFrame=targetFrame}
-        table.insert(_dragTargets, d)
-        dragHandle.InputBegan:Connect(function(input)
-                if input.UserInputType == Enum.UserInputType.MouseButton1
-                        or input.UserInputType == Enum.UserInputType.Touch then
-                        if canMoveCheck and not canMoveCheck() then return end
-                        d.dragging = true
-                        d.dragStart = input.Position
-                        d.startPos = targetFrame.Position
-                        input.Changed:Connect(function()
-                                if input.UserInputState == Enum.UserInputState.End then
-                                        d.dragging = false
-                                end
-                        end)
-                end
-        end)
-        dragHandle.InputChanged:Connect(function(input)
-                if input.UserInputType == Enum.UserInputType.MouseMovement
-                        or input.UserInputType == Enum.UserInputType.Touch then
-                        d.dragInput = input
-                end
-        end)
+local function statusLabel(parent, order, text)
+	return new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+		Text = text, Font = Theme.Font, TextSize = 11, TextColor3 = Theme.TextFaint,
+		TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true, LayoutOrder = order,
+	}, parent)
 end
 
-makeDraggable(TitleBar, MainFrame, nil)
+local function actionButton(parent, order, text, variant)
+	local bg = Theme.Elevated
+	local fg = Theme.Text
+	if variant == "primary" then bg, fg = Theme.Accent, Theme.AccentText
+	elseif variant == "danger" then bg, fg = Theme.Danger, Theme.Text end
+	local b = new("TextButton", {
+		Size = UDim2.new(1, 0, 0, 40), BackgroundColor3 = bg, BorderSizePixel = 0,
+		Text = text, Font = Theme.FontBold, TextSize = 13, TextColor3 = fg,
+		AutoButtonColor = false, LayoutOrder = order,
+	}, parent)
+	corner(b, 12)
+	polish(b)
+	return b
+end
 
--- Show UI on load
-MainFrame.Visible = true
+local function textInput(parent, order, placeholder, initialText)
+	local box = new("TextBox", {
+		Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = Theme.Elevated, BorderSizePixel = 0,
+		PlaceholderText = placeholder, PlaceholderColor3 = Theme.TextFaint, Text = initialText or "",
+		TextColor3 = Theme.Text, Font = Theme.Font, TextSize = 13, ClearTextOnFocus = false,
+		LayoutOrder = order,
+	}, parent)
+	corner(box, 10)
+	pad(box, 12, 0, 10, 0)
+	return box
+end
 
+local function inputWithButton(parent, order, placeholder, initialText, btnText)
+	local row = new("Frame", { Size = UDim2.new(1, 0, 0, 36), BackgroundTransparency = 1, LayoutOrder = order }, parent)
+	local box = new("TextBox", {
+		Size = UDim2.new(1, -80, 1, 0), BackgroundColor3 = Theme.Elevated, BorderSizePixel = 0,
+		PlaceholderText = placeholder, PlaceholderColor3 = Theme.TextFaint, Text = initialText or "",
+		TextColor3 = Theme.Text, Font = Theme.Font, TextSize = 13, ClearTextOnFocus = false,
+	}, row)
+	corner(box, 10)
+	pad(box, 12, 0, 8, 0)
+	local btn = new("TextButton", {
+		Size = UDim2.new(0, 74, 1, 0), Position = UDim2.new(1, -74, 0, 0), BackgroundColor3 = Theme.Accent,
+		Text = btnText, Font = Theme.FontBold, TextSize = 12, TextColor3 = Theme.AccentText,
+		AutoButtonColor = false, BorderSizePixel = 0,
+	}, row)
+	corner(btn, 10)
+	polish(btn)
+	return box, btn
+end
+
+-- Numeric "stepper" row: label shows the live descriptive text (owned by
+-- the logic layer), +/- buttons drive the actual value change (unchanged
+-- logic hookup), and a slim accent track underneath gives a real slider
+-- *visual* by reading the number back out of the label whenever it changes.
+local function stepper(parent, order, initialText, minV, maxV)
+	local row = new("Frame", { Size = UDim2.new(1, 0, 0, 40), BackgroundTransparency = 1, LayoutOrder = order }, parent)
+	local lbl = new("TextLabel", {
+		Size = UDim2.new(1, -80, 0, 20), BackgroundTransparency = 1, Text = initialText,
+		Font = Theme.Font, TextSize = 12, TextColor3 = Theme.TextDim,
+		TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true,
+	}, row)
+	local down = new("TextButton", {
+		Size = UDim2.new(0, 32, 0, 26), Position = UDim2.new(1, -72, 0, 0), BackgroundColor3 = Theme.Elevated,
+		Text = "-", Font = Theme.FontBold, TextSize = 16, TextColor3 = Theme.Text,
+		AutoButtonColor = false, BorderSizePixel = 0,
+	}, row)
+	corner(down, 9)
+	polish(down, { noScale = true })
+	local up = new("TextButton", {
+		Size = UDim2.new(0, 32, 0, 26), Position = UDim2.new(1, -36, 0, 0), BackgroundColor3 = Theme.Elevated,
+		Text = "+", Font = Theme.FontBold, TextSize = 16, TextColor3 = Theme.Text,
+		AutoButtonColor = false, BorderSizePixel = 0,
+	}, row)
+	corner(up, 9)
+	polish(up, { noScale = true })
+
+	local track = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 3), Position = UDim2.new(0, 0, 1, -3),
+		BackgroundColor3 = Theme.Track, BorderSizePixel = 0,
+	}, row)
+	corner(track, 2)
+	local fill = new("Frame", { Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = Theme.Accent, BorderSizePixel = 0 }, track)
+	corner(fill, 2)
+
+	if minV and maxV then
+		local function sync()
+			local n = tonumber(lbl.Text:match("%-?%d+%.?%d*"))
+			if n then
+				local pct = math.clamp((n - minV) / (maxV - minV), 0, 1)
+				tw(fill, 0.18, { Size = UDim2.new(pct, 0, 1, 0) })
+			end
+		end
+		lbl:GetPropertyChangedSignal("Text"):Connect(sync)
+		sync()
+	end
+
+	return down, up, lbl
+end
+
+-- Equal-width segmented button row (2-5 options). Colors are left neutral;
+-- the logic layer recolors the selected option itself.
+local function segmented(parent, order, labels, opts)
+	opts = opts or {}
+	local n = #labels
+	local row = new("Frame", { Size = UDim2.new(1, 0, 0, opts.height or 32), BackgroundTransparency = 1, LayoutOrder = order }, parent)
+	new("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	}, row)
+	local gap = 6 * (n - 1) / n
+	local btns = {}
+	for i, text in ipairs(labels) do
+		local b = new("TextButton", {
+			Size = UDim2.new(1 / n, -gap, 1, 0), BackgroundColor3 = Theme.Elevated, BorderSizePixel = 0,
+			Text = text, Font = Theme.FontBold, TextSize = opts.textSize or 12, TextColor3 = Theme.TextDim,
+			TextWrapped = true, AutoButtonColor = false, LayoutOrder = i,
+		}, row)
+		corner(b, 9)
+		polish(b, { noScale = true })
+		btns[i] = b
+	end
+	return table.unpack(btns)
+end
+
+-- Ore/mob searchable checklist section
+local function searchSection(parent, order, placeholderText)
+	local wrap = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, LayoutOrder = order }, parent)
+	new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, wrap)
+
+	local searchBox = new("TextBox", {
+		Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = Theme.Elevated, BorderSizePixel = 0,
+		PlaceholderText = placeholderText, PlaceholderColor3 = Theme.TextFaint, Text = "",
+		TextColor3 = Theme.Text, Font = Theme.Font, TextSize = 13, ClearTextOnFocus = false, LayoutOrder = 1,
+	}, wrap)
+	corner(searchBox, 10)
+	pad(searchBox, 34, 0, 10, 0)
+	local searchIconHolder = new("Frame", {
+		Size = UDim2.new(0, 14, 0, 14), Position = UDim2.new(0, 12, 0.5, 0),
+		AnchorPoint = Vector2.new(0, 0.5), BackgroundTransparency = 1,
+	}, searchBox)
+	local ring = new("Frame", { Size = UDim2.new(0, 9, 0, 9), Position = UDim2.new(0, 0, 0, 0), BackgroundColor3 = Theme.TextFaint, BorderSizePixel = 0 }, searchIconHolder)
+	corner(ring, 5)
+	stroke(ring, Theme.TextFaint, 1.5, 0)
+	ring.BackgroundTransparency = 1
+	local handle = new("Frame", {
+		Size = UDim2.new(0, 6, 0, 2), Position = UDim2.new(0, 8, 0, 9), Rotation = 45,
+		BackgroundColor3 = Theme.TextFaint, BorderSizePixel = 0,
+	}, searchIconHolder)
+	corner(handle, 1)
+
+	local btnRow = new("Frame", { Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, LayoutOrder = 2 }, wrap)
+	new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, btnRow)
+	local selAll = new("TextButton", {
+		Size = UDim2.new(0.5, -4, 1, 0), BackgroundColor3 = Theme.Elevated, Text = "Select All",
+		Font = Theme.FontBold, TextSize = 12, TextColor3 = Theme.TextDim, AutoButtonColor = false,
+		BorderSizePixel = 0, LayoutOrder = 1,
+	}, btnRow)
+	corner(selAll, 9); polish(selAll, { noScale = true })
+	local clrAll = new("TextButton", {
+		Size = UDim2.new(0.5, -4, 1, 0), BackgroundColor3 = Theme.Elevated, Text = "Clear All",
+		Font = Theme.FontBold, TextSize = 12, TextColor3 = Theme.TextDim, AutoButtonColor = false,
+		BorderSizePixel = 0, LayoutOrder = 2,
+	}, btnRow)
+	corner(clrAll, 9); polish(clrAll, { noScale = true })
+
+	local scroll = new("ScrollingFrame", {
+		Size = UDim2.new(1, 0, 0, 168), BackgroundColor3 = Theme.Surface, BorderSizePixel = 0,
+		ScrollBarThickness = 4, ScrollBarImageColor3 = Theme.Accent, ScrollBarImageTransparency = 0.3,
+		CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y, LayoutOrder = 3,
+	}, wrap)
+	corner(scroll, 10)
+	new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, scroll)
+	pad(scroll, 6, 6, 6, 6)
+
+	local selectedLabel = new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, Text = "Selected: None",
+		Font = Theme.Font, TextSize = 12, TextColor3 = Color3.fromRGB(255, 120, 120),
+		TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 4,
+	}, wrap)
+
+	return searchBox, selAll, clrAll, scroll, selectedLabel
+end
+
+-- ================================================================
 -- // PLAYER PAGE
-local PlayerPage = Instance.new("ScrollingFrame")
-PlayerPage.Name = "PlayerPage"
-PlayerPage.Size = UDim2.new(1, 0, 1, 0)
-PlayerPage.BackgroundTransparency = 1
+-- ================================================================
+local PlayerPage = newPage("Player")
 PlayerPage.Visible = true
-PlayerPage.ScrollBarThickness = 4
-PlayerPage.ScrollBarImageColor3 = Color3.fromRGB(100, 180, 255)
-PlayerPage.CanvasSize = UDim2.new(0, 0, 0, 560)
-PlayerPage.AutomaticCanvasSize = Enum.AutomaticSize.Y
-PlayerPage.Parent = ContentArea
-Pages["Player"] = PlayerPage
 
-local PlayerPagePad = Instance.new("UIPadding")
-PlayerPagePad.PaddingLeft = UDim.new(0, 14)
-PlayerPagePad.PaddingTop = UDim.new(0, 14)
-PlayerPagePad.PaddingRight = UDim.new(0, 14)
-PlayerPagePad.Parent = PlayerPage
-
-local PlayerTitle = Instance.new("TextLabel")
-PlayerTitle.Size = UDim2.new(1, 0, 0, 24)
-PlayerTitle.BackgroundTransparency = 1
-PlayerTitle.Text = "Player"
-PlayerTitle.TextColor3 = Color3.fromRGB(180, 210, 255)
-PlayerTitle.TextXAlignment = Enum.TextXAlignment.Left
-PlayerTitle.Font = Enum.Font.GothamBold
-PlayerTitle.TextSize = 15
-PlayerTitle.Parent = PlayerPage
-
--- Auto Parry Section
-local ParryLabel = Instance.new("TextLabel")
-ParryLabel.Size = UDim2.new(1, 0, 0, 20)
-ParryLabel.Position = UDim2.new(0, 0, 0, 34)
-ParryLabel.BackgroundTransparency = 1
-ParryLabel.Text = "Auto Parry - blocks enemy attacks automatically"
-ParryLabel.TextXAlignment = Enum.TextXAlignment.Left
-ParryLabel.Font = Enum.Font.Gotham
-ParryLabel.TextSize = 12
-ParryLabel.TextWrapped = true
-ParryLabel.Parent = PlayerPage
-
-local AutoParryBtn = Instance.new("TextButton")
-AutoParryBtn.Size = UDim2.new(1, 0, 0, 36)
-AutoParryBtn.Position = UDim2.new(0, 0, 0, 60)
-AutoParryBtn.BackgroundColor3 = Color3.fromRGB(40, 120, 180)
-AutoParryBtn.BorderSizePixel = 0
-AutoParryBtn.Text = "Auto Parry: OFF"
-AutoParryBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-AutoParryBtn.Font = Enum.Font.GothamBold
-AutoParryBtn.TextSize = 14
-AutoParryBtn.AutoButtonColor = false
-AutoParryBtn.Parent = PlayerPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 8)
-        corner.Parent = AutoParryBtn
-end
-
-local ParryInfo = Instance.new("TextLabel")
-ParryInfo.Size = UDim2.new(1, 0, 0, 30)
-ParryInfo.Position = UDim2.new(0, 0, 0, 100)
-ParryInfo.BackgroundTransparency = 1
-ParryInfo.Text = "2-Layer: AttackWarning remote + Animations"
-ParryInfo.TextColor3 = Color3.fromRGB(90, 100, 130)
-ParryInfo.TextXAlignment = Enum.TextXAlignment.Left
-ParryInfo.Font = Enum.Font.Gotham
-ParryInfo.TextSize = 10
-ParryInfo.TextWrapped = true
-ParryInfo.Parent = PlayerPage
-
-local ParryHoldLabel = Instance.new("TextLabel")
-ParryHoldLabel.Size = UDim2.new(0, 180, 0, 28)
-ParryHoldLabel.Position = UDim2.new(0, 0, 0, 140)
-ParryHoldLabel.BackgroundTransparency = 1
-ParryHoldLabel.Text = "Hold: 0.5s | Cooldown: 0.2s"
-ParryHoldLabel.TextColor3 = Color3.fromRGB(160, 180, 220)
-ParryHoldLabel.TextXAlignment = Enum.TextXAlignment.Left
-ParryHoldLabel.Font = Enum.Font.Gotham
-ParryHoldLabel.TextSize = 13
-ParryHoldLabel.Parent = PlayerPage
-
-local ParryStatus = Instance.new("TextLabel")
-ParryStatus.Size = UDim2.new(1, 0, 0, 18)
-ParryStatus.Position = UDim2.new(0, 0, 0, 170)
-ParryStatus.BackgroundTransparency = 1
-ParryStatus.Text = "Status: Idle"
-ParryStatus.TextColor3 = Color3.fromRGB(140, 150, 180)
-ParryStatus.TextXAlignment = Enum.TextXAlignment.Left
-ParryStatus.Font = Enum.Font.Gotham
-ParryStatus.TextSize = 11
-ParryStatus.Parent = PlayerPage
-
--- Spam Parry section
-local SpamParryDivider = Instance.new("Frame")
-SpamParryDivider.Size = UDim2.new(1, 0, 0, 1)
-SpamParryDivider.Position = UDim2.new(0, 0, 0, 196)
-SpamParryDivider.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-SpamParryDivider.BorderSizePixel = 0
-SpamParryDivider.Parent = PlayerPage
-
-local SpamParryLabel = Instance.new("TextLabel")
-SpamParryLabel.Size = UDim2.new(1, 0, 0, 20)
-SpamParryLabel.Position = UDim2.new(0, 0, 0, 202)
-SpamParryLabel.BackgroundTransparency = 1
-SpamParryLabel.Text = "Spam Parry - holds & releases block in a loop"
-SpamParryLabel.TextXAlignment = Enum.TextXAlignment.Left
-SpamParryLabel.Font = Enum.Font.Gotham
-SpamParryLabel.TextSize = 12
-SpamParryLabel.TextWrapped = true
-SpamParryLabel.Parent = PlayerPage
-
-local SpamParryBtn = Instance.new("TextButton")
-SpamParryBtn.Size = UDim2.new(1, 0, 0, 34)
-SpamParryBtn.Position = UDim2.new(0, 0, 0, 226)
-SpamParryBtn.BackgroundColor3 = Color3.fromRGB(120, 60, 160)
-SpamParryBtn.BorderSizePixel = 0
-SpamParryBtn.Text = "Spam Parry: OFF"
-SpamParryBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-SpamParryBtn.Font = Enum.Font.GothamBold
-SpamParryBtn.TextSize = 14
-SpamParryBtn.AutoButtonColor = false
-SpamParryBtn.Parent = PlayerPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 8)
-        corner.Parent = SpamParryBtn
-end
-
--- Spam parry length adjuster
-local SpamParryLenLabel = Instance.new("TextLabel")
-SpamParryLenLabel.Size = UDim2.new(0, 180, 0, 28)
-SpamParryLenLabel.Position = UDim2.new(0, 0, 0, 264)
-SpamParryLenLabel.BackgroundTransparency = 1
-SpamParryLenLabel.Text = "Hold length: 0.3s"
-SpamParryLenLabel.TextColor3 = Color3.fromRGB(160, 180, 220)
-SpamParryLenLabel.TextXAlignment = Enum.TextXAlignment.Left
-SpamParryLenLabel.Font = Enum.Font.Gotham
-SpamParryLenLabel.TextSize = 13
-SpamParryLenLabel.Parent = PlayerPage
-
-local SpamParryDownBtn = Instance.new("TextButton")
-SpamParryDownBtn.Size = UDim2.new(0, 36, 0, 24)
-SpamParryDownBtn.Position = UDim2.new(0, 186, 0, 267)
-SpamParryDownBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-SpamParryDownBtn.BorderSizePixel = 0
-SpamParryDownBtn.Text = "-"
-SpamParryDownBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-SpamParryDownBtn.Font = Enum.Font.GothamBold
-SpamParryDownBtn.TextSize = 14
-SpamParryDownBtn.AutoButtonColor = false
-SpamParryDownBtn.Parent = PlayerPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = SpamParryDownBtn
-end
-
-local SpamParryUpBtn = Instance.new("TextButton")
-SpamParryUpBtn.Size = UDim2.new(0, 36, 0, 24)
-SpamParryUpBtn.Position = UDim2.new(0, 228, 0, 267)
-SpamParryUpBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-SpamParryUpBtn.BorderSizePixel = 0
-SpamParryUpBtn.Text = "+"
-SpamParryUpBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-SpamParryUpBtn.Font = Enum.Font.GothamBold
-SpamParryUpBtn.TextSize = 14
-SpamParryUpBtn.AutoButtonColor = false
-SpamParryUpBtn.Parent = PlayerPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = SpamParryUpBtn
-end
-
-local SpamParryStatus = Instance.new("TextLabel")
-SpamParryStatus.Size = UDim2.new(1, 0, 0, 16)
-SpamParryStatus.Position = UDim2.new(0, 0, 0, 296)
-SpamParryStatus.BackgroundTransparency = 1
-SpamParryStatus.Text = "Idle"
-SpamParryStatus.TextColor3 = Color3.fromRGB(140, 150, 180)
-SpamParryStatus.TextXAlignment = Enum.TextXAlignment.Left
-SpamParryStatus.Font = Enum.Font.Gotham
-SpamParryStatus.TextSize = 10
-SpamParryStatus.Parent = PlayerPage
-
--- ===== AUTO FISHING SECTION =====
-local FishDivider = Instance.new("Frame")
-FishDivider.Size = UDim2.new(1, 0, 0, 1)
-FishDivider.Position = UDim2.new(0, 0, 0, 316)
-FishDivider.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-FishDivider.BorderSizePixel = 0
-FishDivider.Parent = PlayerPage
-
-local FishTitle = Instance.new("TextLabel")
-FishTitle.Size = UDim2.new(1, 0, 0, 20)
-FishTitle.Position = UDim2.new(0, 0, 0, 322)
-FishTitle.BackgroundTransparency = 1
-FishTitle.Text = "Auto Fishing"
-FishTitle.TextColor3 = Color3.fromRGB(100, 220, 180)
-FishTitle.TextXAlignment = Enum.TextXAlignment.Left
-FishTitle.Font = Enum.Font.GothamBold
-FishTitle.TextSize = 13
-FishTitle.Parent = PlayerPage
-
--- Rod name input
-local RodNameBox = Instance.new("TextBox")
-RodNameBox.Size = UDim2.new(1, 0, 0, 26)
-RodNameBox.Position = UDim2.new(0, 0, 0, 346)
-RodNameBox.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
-RodNameBox.BorderSizePixel = 0
-RodNameBox.PlaceholderText = "Rod name (e.g. Rod of Kings)"
-RodNameBox.PlaceholderColor3 = Color3.fromRGB(90, 100, 130)
-RodNameBox.Text = "Rod of Kings"
-RodNameBox.TextColor3 = Color3.fromRGB(220, 230, 255)
-RodNameBox.Font = Enum.Font.Gotham
-RodNameBox.TextSize = 12
-RodNameBox.ClearTextOnFocus = false
-RodNameBox.Parent = PlayerPage
-do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,6); c.Parent = RodNameBox end
-do local p = Instance.new("UIPadding"); p.PaddingLeft = UDim.new(0,8); p.Parent = RodNameBox end
-
--- Wait time selector (seconds after cast before attempting to catch)
-local FishWaitLabel = Instance.new("TextLabel")
-FishWaitLabel.Size = UDim2.new(0, 180, 0, 26)
-FishWaitLabel.Position = UDim2.new(0, 0, 0, 406)
-FishWaitLabel.BackgroundTransparency = 1
-FishWaitLabel.Text = "Wait before reel: 1.40 sec"
-FishWaitLabel.TextColor3 = Color3.fromRGB(160, 180, 220)
-FishWaitLabel.TextXAlignment = Enum.TextXAlignment.Left
-FishWaitLabel.Font = Enum.Font.Gotham
-FishWaitLabel.TextSize = 12
-FishWaitLabel.Parent = PlayerPage
-
-local FishWaitDownBtn = Instance.new("TextButton")
-FishWaitDownBtn.Size = UDim2.new(0, 28, 0, 24)
-FishWaitDownBtn.Position = UDim2.new(0, 186, 0, 408)
-FishWaitDownBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-FishWaitDownBtn.BorderSizePixel = 0
-FishWaitDownBtn.Text = "-"
-FishWaitDownBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-FishWaitDownBtn.Font = Enum.Font.GothamBold
-FishWaitDownBtn.TextSize = 14
-FishWaitDownBtn.AutoButtonColor = false
-FishWaitDownBtn.Parent = PlayerPage
-do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,6); c.Parent = FishWaitDownBtn end
-
-local FishWaitUpBtn = Instance.new("TextButton")
-FishWaitUpBtn.Size = UDim2.new(0, 28, 0, 24)
-FishWaitUpBtn.Position = UDim2.new(0, 218, 0, 408)
-FishWaitUpBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-FishWaitUpBtn.BorderSizePixel = 0
-FishWaitUpBtn.Text = "+"
-FishWaitUpBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-FishWaitUpBtn.Font = Enum.Font.GothamBold
-FishWaitUpBtn.TextSize = 14
-FishWaitUpBtn.AutoButtonColor = false
-FishWaitUpBtn.Parent = PlayerPage
-do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,6); c.Parent = FishWaitUpBtn end
-
--- Auto Fish toggle button
-local AutoFishBtn = Instance.new("TextButton")
-AutoFishBtn.Size = UDim2.new(1, 0, 0, 36)
-AutoFishBtn.Position = UDim2.new(0, 0, 0, 440)
-AutoFishBtn.BackgroundColor3 = Color3.fromRGB(40, 120, 100)
-AutoFishBtn.BorderSizePixel = 0
-AutoFishBtn.Text = ">  Start Auto Fish"
-AutoFishBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-AutoFishBtn.Font = Enum.Font.GothamBold
-AutoFishBtn.TextSize = 14
-AutoFishBtn.AutoButtonColor = false
-AutoFishBtn.Parent = PlayerPage
-do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,8); c.Parent = AutoFishBtn end
-
-local FishStatus = Instance.new("TextLabel")
-FishStatus.Size = UDim2.new(1, 0, 0, 30)
-FishStatus.Position = UDim2.new(0, 0, 0, 480)
-FishStatus.BackgroundTransparency = 1
-FishStatus.Text = "Status: Idle"
-FishStatus.TextColor3 = Color3.fromRGB(140, 150, 180)
-FishStatus.TextXAlignment = Enum.TextXAlignment.Left
-FishStatus.Font = Enum.Font.Gotham
-FishStatus.TextSize = 10
-FishStatus.TextWrapped = true
-FishStatus.Parent = PlayerPage
-
--- // AUTO PAGE
-local AutoPage = Instance.new("Frame")
-AutoPage.Name = "AutoPage"
-AutoPage.Size = UDim2.new(1, 0, 1, 0)
-AutoPage.BackgroundTransparency = 1
-AutoPage.Visible = false
-AutoPage.Parent = ContentArea
-Pages["Auto"] = AutoPage
-
-local AutoPagePadding = Instance.new("UIPadding")
-AutoPagePadding.PaddingLeft = UDim.new(0, 12)
-AutoPagePadding.PaddingRight = UDim.new(0, 12)
-AutoPagePadding.PaddingTop = UDim.new(0, 8)
-AutoPagePadding.Parent = AutoPage
-
-local OreLabel = Instance.new("TextLabel")
-OreLabel.Size = UDim2.new(1, 0, 0, 20)
-OreLabel.BackgroundTransparency = 1
-OreLabel.Text = "Select Ores (click to toggle)"
-OreLabel.TextColor3 = Color3.fromRGB(140, 170, 220)
-OreLabel.TextXAlignment = Enum.TextXAlignment.Left
-OreLabel.Font = Enum.Font.GothamBold
-OreLabel.TextSize = 13
-OreLabel.Parent = AutoPage
-
-local SearchBox = Instance.new("TextBox")
-SearchBox.Size = UDim2.new(0.52, 0, 0, 28)
-SearchBox.Position = UDim2.new(0, 0, 0, 24)
-SearchBox.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
-SearchBox.BorderSizePixel = 0
-SearchBox.PlaceholderText = "Filter ores..."
-SearchBox.PlaceholderColor3 = Color3.fromRGB(90, 100, 130)
-SearchBox.TextColor3 = Color3.fromRGB(220, 230, 255)
-SearchBox.Font = Enum.Font.Gotham
-SearchBox.TextSize = 12
-SearchBox.ClearTextOnFocus = false
-SearchBox.Parent = AutoPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 8)
-        corner.Parent = SearchBox
-end
-
-local SearchPad = Instance.new("UIPadding")
-SearchPad.PaddingLeft = UDim.new(0, 8)
-SearchPad.Parent = SearchBox
-
-local SelectAllBtn = Instance.new("TextButton")
-SelectAllBtn.Size = UDim2.new(0, 72, 0, 28)
-SelectAllBtn.Position = UDim2.new(0.52, 6, 0, 24)
-SelectAllBtn.BackgroundColor3 = Color3.fromRGB(40, 80, 140)
-SelectAllBtn.BorderSizePixel = 0
-SelectAllBtn.Text = "Sel All"
-SelectAllBtn.TextColor3 = Color3.fromRGB(200, 220, 255)
-SelectAllBtn.Font = Enum.Font.GothamBold
-SelectAllBtn.TextSize = 10
-SelectAllBtn.AutoButtonColor = false
-SelectAllBtn.Parent = AutoPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 8)
-        corner.Parent = SelectAllBtn
-end
-
-local DeselectAllBtn = Instance.new("TextButton")
-DeselectAllBtn.Size = UDim2.new(0, 72, 0, 28)
-DeselectAllBtn.Position = UDim2.new(0.52, 82, 0, 24)
-DeselectAllBtn.BackgroundColor3 = Color3.fromRGB(80, 50, 50)
-DeselectAllBtn.BorderSizePixel = 0
-DeselectAllBtn.Text = "Clr All"
-DeselectAllBtn.TextColor3 = Color3.fromRGB(200, 180, 180)
-DeselectAllBtn.Font = Enum.Font.GothamBold
-DeselectAllBtn.TextSize = 10
-DeselectAllBtn.AutoButtonColor = false
-DeselectAllBtn.Parent = AutoPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 8)
-        corner.Parent = DeselectAllBtn
-end
-
-local OreScroll = Instance.new("ScrollingFrame")
-OreScroll.Size = UDim2.new(1, 0, 0, 130)
-OreScroll.Position = UDim2.new(0, 0, 0, 58)
-OreScroll.BackgroundColor3 = Color3.fromRGB(22, 22, 34)
-OreScroll.BorderSizePixel = 0
-OreScroll.ScrollBarThickness = 4
-OreScroll.ScrollBarImageColor3 = Color3.fromRGB(80, 130, 255)
-OreScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-OreScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-OreScroll.Parent = AutoPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 8)
-        corner.Parent = OreScroll
-end
-
-local OreListLayout = Instance.new("UIListLayout")
-OreListLayout.Padding = UDim.new(0, 4)
-OreListLayout.Parent = OreScroll
-
-local OreListPad = Instance.new("UIPadding")
-OreListPad.PaddingLeft = UDim.new(0, 6)
-OreListPad.PaddingRight = UDim.new(0, 6)
-OreListPad.PaddingTop = UDim.new(0, 4)
-OreListPad.Parent = OreScroll
-
-local SelectedLabel = Instance.new("TextLabel")
-SelectedLabel.Size = UDim2.new(1, 0, 0, 20)
-SelectedLabel.Position = UDim2.new(0, 0, 0, 192)
-SelectedLabel.BackgroundTransparency = 1
-SelectedLabel.Text = "Selected: None"
-SelectedLabel.TextColor3 = Color3.fromRGB(100, 200, 130)
-SelectedLabel.TextXAlignment = Enum.TextXAlignment.Left
-SelectedLabel.Font = Enum.Font.Gotham
-SelectedLabel.TextSize = 12
-SelectedLabel.Parent = AutoPage
-
-local StatusLabel = Instance.new("TextLabel")
-StatusLabel.Size = UDim2.new(1, 0, 0, 18)
-StatusLabel.Position = UDim2.new(0, 0, 0, 212)
-StatusLabel.BackgroundTransparency = 1
-StatusLabel.Text = "Status: Idle | Fly: OFF"
-StatusLabel.TextColor3 = Color3.fromRGB(140, 150, 180)
-StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
-StatusLabel.Font = Enum.Font.Gotham
-StatusLabel.TextSize = 11
-StatusLabel.Parent = AutoPage
-
-local AutoFarmBtn = Instance.new("TextButton")
-AutoFarmBtn.Size = UDim2.new(0.48, 0, 0, 34)
-AutoFarmBtn.Position = UDim2.new(0, 0, 0, 234)
-AutoFarmBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 80)
-AutoFarmBtn.BorderSizePixel = 0
-AutoFarmBtn.Text = ">  Auto Farm"
-AutoFarmBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-AutoFarmBtn.Font = Enum.Font.GothamBold
-AutoFarmBtn.TextSize = 13
-AutoFarmBtn.AutoButtonColor = false
-AutoFarmBtn.Parent = AutoPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 8)
-        corner.Parent = AutoFarmBtn
-end
-
-local AllOresBtn = Instance.new("TextButton")
-AllOresBtn.Size = UDim2.new(0.48, 0, 0, 34)
-AllOresBtn.Position = UDim2.new(0.52, 0, 0, 234)
-AllOresBtn.BackgroundColor3 = Color3.fromRGB(140, 80, 180)
-AllOresBtn.BorderSizePixel = 0
-AllOresBtn.Text = "[M]  All Ores"
-AllOresBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-AllOresBtn.Font = Enum.Font.GothamBold
-AllOresBtn.TextSize = 13
-AllOresBtn.AutoButtonColor = false
-AllOresBtn.Parent = AutoPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 8)
-        corner.Parent = AllOresBtn
-end
-
-local LoopInfoLabel = Instance.new("TextLabel")
-LoopInfoLabel.Size = UDim2.new(1, 0, 0, 16)
-LoopInfoLabel.Position = UDim2.new(0, 0, 0, 272)
-LoopInfoLabel.BackgroundTransparency = 1
-LoopInfoLabel.Text = "Cycles ores when depleted | Fly + Face ore"
-LoopInfoLabel.TextColor3 = Color3.fromRGB(90, 100, 130)
-LoopInfoLabel.TextXAlignment = Enum.TextXAlignment.Left
-LoopInfoLabel.Font = Enum.Font.Gotham
-LoopInfoLabel.TextSize = 10
-LoopInfoLabel.Parent = AutoPage
-
--- // AUTO DEPOSIT GOLD SECTION
-local GoldDivider = Instance.new("Frame")
-GoldDivider.Size = UDim2.new(1, 0, 0, 1)
-GoldDivider.Position = UDim2.new(0, 0, 0, 296)
-GoldDivider.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-GoldDivider.BorderSizePixel = 0
-GoldDivider.Parent = AutoPage
-
-local GoldTitle = Instance.new("TextLabel")
-GoldTitle.Size = UDim2.new(1, 0, 0, 18)
-GoldTitle.Position = UDim2.new(0, 0, 0, 302)
-GoldTitle.BackgroundTransparency = 1
-GoldTitle.Text = "Auto Deposit Gold"
-GoldTitle.TextColor3 = Color3.fromRGB(255, 200, 80)
-GoldTitle.TextXAlignment = Enum.TextXAlignment.Left
-GoldTitle.Font = Enum.Font.GothamBold
-GoldTitle.TextSize = 13
-GoldTitle.Parent = AutoPage
-
-local AutoDepositBtn = Instance.new("TextButton")
-AutoDepositBtn.Size = UDim2.new(0.48, 0, 0, 32)
-AutoDepositBtn.Position = UDim2.new(0, 0, 0, 324)
-AutoDepositBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-AutoDepositBtn.BorderSizePixel = 0
-AutoDepositBtn.Text = "Auto Deposit: OFF"
-AutoDepositBtn.TextColor3 = Color3.fromRGB(220, 220, 240)
-AutoDepositBtn.Font = Enum.Font.GothamBold
-AutoDepositBtn.TextSize = 12
-AutoDepositBtn.AutoButtonColor = false
-AutoDepositBtn.Parent = AutoPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 8)
-        corner.Parent = AutoDepositBtn
-end
-
--- Threshold label + adjusters
-local GoldThresholdLabel = Instance.new("TextLabel")
-GoldThresholdLabel.Size = UDim2.new(0, 170, 0, 28)
-GoldThresholdLabel.Position = UDim2.new(0, 0, 0, 362)
-GoldThresholdLabel.BackgroundTransparency = 1
-GoldThresholdLabel.Text = "Cooldown: " .. string.format("%.1f", AUTO_DEPOSIT_COOLDOWN) .. "s"
-GoldThresholdLabel.TextColor3 = Color3.fromRGB(160, 180, 220)
-GoldThresholdLabel.TextXAlignment = Enum.TextXAlignment.Left
-GoldThresholdLabel.Font = Enum.Font.Gotham
-GoldThresholdLabel.TextSize = 12
-GoldThresholdLabel.Parent = AutoPage
-
-local GoldThreshDownBtn = Instance.new("TextButton")
-GoldThreshDownBtn.Size = UDim2.new(0, 32, 0, 24)
-GoldThreshDownBtn.Position = UDim2.new(0, 176, 0, 365)
-GoldThreshDownBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-GoldThreshDownBtn.BorderSizePixel = 0
-GoldThreshDownBtn.Text = "-"
-GoldThreshDownBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-GoldThreshDownBtn.Font = Enum.Font.GothamBold
-GoldThreshDownBtn.TextSize = 14
-GoldThreshDownBtn.AutoButtonColor = false
-GoldThreshDownBtn.Parent = AutoPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = GoldThreshDownBtn
-end
-
-local GoldThreshUpBtn = Instance.new("TextButton")
-GoldThreshUpBtn.Size = UDim2.new(0, 32, 0, 24)
-GoldThreshUpBtn.Position = UDim2.new(0, 214, 0, 365)
-GoldThreshUpBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-GoldThreshUpBtn.BorderSizePixel = 0
-GoldThreshUpBtn.Text = "+"
-GoldThreshUpBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-GoldThreshUpBtn.Font = Enum.Font.GothamBold
-GoldThreshUpBtn.TextSize = 14
-GoldThreshUpBtn.AutoButtonColor = false
-GoldThreshUpBtn.Parent = AutoPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = GoldThreshUpBtn
-end
-
-local GoldStatus = Instance.new("TextLabel")
-GoldStatus.Size = UDim2.new(1, 0, 0, 16)
-GoldStatus.Position = UDim2.new(0, 0, 0, 392)
-GoldStatus.BackgroundTransparency = 1
-GoldStatus.Text = "Status: Idle"
-GoldStatus.TextColor3 = Color3.fromRGB(140, 150, 180)
-GoldStatus.TextXAlignment = Enum.TextXAlignment.Left
-GoldStatus.Font = Enum.Font.Gotham
-GoldStatus.TextSize = 10
-GoldStatus.Parent = AutoPage
-
--- // MOB PAGE
-local MobPage = Instance.new("ScrollingFrame")
-MobPage.Name = "MobPage"
-MobPage.Size = UDim2.new(1, 0, 1, 0)
-MobPage.BackgroundTransparency = 1
-MobPage.Visible = false
-MobPage.ClipsDescendants = true
-MobPage.ScrollBarThickness = 4
-MobPage.ScrollBarImageColor3 = Color3.fromRGB(180, 100, 200)
-MobPage.CanvasSize = UDim2.new(0, 0, 0, 820)
-MobPage.AutomaticCanvasSize = Enum.AutomaticSize.Y
-MobPage.Parent = ContentArea
-Pages["Mob"] = MobPage
-
-local MobPagePad = Instance.new("UIPadding")
-MobPagePad.PaddingLeft = UDim.new(0, 12)
-MobPagePad.PaddingRight = UDim.new(0, 12)
-MobPagePad.PaddingTop = UDim.new(0, 8)
-MobPagePad.Parent = MobPage
-
-local MobTitle = Instance.new("TextLabel")
-MobTitle.Size = UDim2.new(1, 0, 0, 20)
-MobTitle.BackgroundTransparency = 1
-MobTitle.Text = "Select Mobs (click to toggle)"
-MobTitle.TextColor3 = Color3.fromRGB(140, 170, 220)
-MobTitle.TextXAlignment = Enum.TextXAlignment.Left
-MobTitle.Font = Enum.Font.GothamBold
-MobTitle.TextSize = 13
-MobTitle.Parent = MobPage
-
-local MobSearchBox = Instance.new("TextBox")
-MobSearchBox.Size = UDim2.new(0.52, 0, 0, 26)
-MobSearchBox.Position = UDim2.new(0, 0, 0, 24)
-MobSearchBox.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
-MobSearchBox.BorderSizePixel = 0
-MobSearchBox.PlaceholderText = "Filter mobs..."
-MobSearchBox.PlaceholderColor3 = Color3.fromRGB(90, 100, 130)
-MobSearchBox.TextColor3 = Color3.fromRGB(220, 230, 255)
-MobSearchBox.Font = Enum.Font.Gotham
-MobSearchBox.TextSize = 12
-MobSearchBox.ClearTextOnFocus = false
-MobSearchBox.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 8)
-        corner.Parent = MobSearchBox
-end
-
-local MobSearchPad = Instance.new("UIPadding")
-MobSearchPad.PaddingLeft = UDim.new(0, 8)
-MobSearchPad.Parent = MobSearchBox
-
-local MobSelAllBtn = Instance.new("TextButton")
-MobSelAllBtn.Size = UDim2.new(0, 72, 0, 26)
-MobSelAllBtn.Position = UDim2.new(0.52, 6, 0, 24)
-MobSelAllBtn.BackgroundColor3 = Color3.fromRGB(40, 80, 140)
-MobSelAllBtn.BorderSizePixel = 0
-MobSelAllBtn.Text = "Sel All"
-MobSelAllBtn.TextColor3 = Color3.fromRGB(200, 220, 255)
-MobSelAllBtn.Font = Enum.Font.GothamBold
-MobSelAllBtn.TextSize = 10
-MobSelAllBtn.AutoButtonColor = false
-MobSelAllBtn.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 8)
-        corner.Parent = MobSelAllBtn
-end
-
-local MobClrAllBtn = Instance.new("TextButton")
-MobClrAllBtn.Size = UDim2.new(0, 72, 0, 26)
-MobClrAllBtn.Position = UDim2.new(0.52, 82, 0, 24)
-MobClrAllBtn.BackgroundColor3 = Color3.fromRGB(80, 50, 50)
-MobClrAllBtn.BorderSizePixel = 0
-MobClrAllBtn.Text = "Clr All"
-MobClrAllBtn.TextColor3 = Color3.fromRGB(200, 180, 180)
-MobClrAllBtn.Font = Enum.Font.GothamBold
-MobClrAllBtn.TextSize = 10
-MobClrAllBtn.AutoButtonColor = false
-MobClrAllBtn.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 8)
-        corner.Parent = MobClrAllBtn
-end
-
-local MobScroll = Instance.new("ScrollingFrame")
-MobScroll.Size = UDim2.new(1, 0, 0, 80)
-MobScroll.Position = UDim2.new(0, 0, 0, 56)
-MobScroll.BackgroundColor3 = Color3.fromRGB(22, 22, 34)
-MobScroll.BorderSizePixel = 0
-MobScroll.ScrollBarThickness = 4
-MobScroll.ScrollBarImageColor3 = Color3.fromRGB(80, 130, 255)
-MobScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-MobScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-MobScroll.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 8)
-        corner.Parent = MobScroll
-end
-
-local MobListLayout = Instance.new("UIListLayout")
-MobListLayout.Padding = UDim.new(0, 4)
-MobListLayout.Parent = MobScroll
-
-local MobListPad = Instance.new("UIPadding")
-MobListPad.PaddingLeft = UDim.new(0, 6)
-MobListPad.PaddingRight = UDim.new(0, 6)
-MobListPad.PaddingTop = UDim.new(0, 4)
-MobListPad.Parent = MobScroll
-
-local MobSelectedLabel = Instance.new("TextLabel")
-MobSelectedLabel.Size = UDim2.new(1, 0, 0, 16)
-MobSelectedLabel.Position = UDim2.new(0, 0, 0, 140)
-MobSelectedLabel.BackgroundTransparency = 1
-MobSelectedLabel.Text = "Selected: None"
-MobSelectedLabel.TextColor3 = Color3.fromRGB(100, 200, 130)
-MobSelectedLabel.TextXAlignment = Enum.TextXAlignment.Left
-MobSelectedLabel.Font = Enum.Font.Gotham
-MobSelectedLabel.TextSize = 11
-MobSelectedLabel.Parent = MobPage
-
--- Attack type toggles
-local AtkTypeLabel = Instance.new("TextLabel")
-AtkTypeLabel.Size = UDim2.new(1, 0, 0, 16)
-AtkTypeLabel.Position = UDim2.new(0, 0, 0, 158)
-AtkTypeLabel.BackgroundTransparency = 1
-AtkTypeLabel.Text = "Attack Types (Mob Farm + Camp Farm):"
-AtkTypeLabel.TextColor3 = Color3.fromRGB(160, 180, 220)
-AtkTypeLabel.TextXAlignment = Enum.TextXAlignment.Left
-AtkTypeLabel.Font = Enum.Font.GothamBold
-AtkTypeLabel.TextSize = 11
-AtkTypeLabel.Parent = MobPage
-
-local LightBtn = Instance.new("TextButton")
-LightBtn.Size = UDim2.new(0.3, 0, 0, 26)
-LightBtn.Position = UDim2.new(0, 0, 0, 176)
-LightBtn.BackgroundColor3 = Color3.fromRGB(40, 120, 60)
-LightBtn.BorderSizePixel = 0
-LightBtn.Text = "Light (1)"
-LightBtn.TextColor3 = Color3.fromRGB(200, 255, 200)
-LightBtn.Font = Enum.Font.GothamBold
-LightBtn.TextSize = 11
-LightBtn.AutoButtonColor = false
-LightBtn.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = LightBtn
-end
-
-local HeavyBtn = Instance.new("TextButton")
-HeavyBtn.Size = UDim2.new(0.3, -2, 0, 26)
-HeavyBtn.Position = UDim2.new(0.33, 0, 0, 176)
-HeavyBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-HeavyBtn.BorderSizePixel = 0
-HeavyBtn.Text = "Heavy (2)"
-HeavyBtn.TextColor3 = Color3.fromRGB(180, 180, 200)
-HeavyBtn.Font = Enum.Font.GothamBold
-HeavyBtn.TextSize = 11
-HeavyBtn.AutoButtonColor = false
-HeavyBtn.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = HeavyBtn
-end
-
-local TechBtn = Instance.new("TextButton")
-TechBtn.Size = UDim2.new(0.3, -2, 0, 26)
-TechBtn.Position = UDim2.new(0.66, 0, 0, 176)
-TechBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-TechBtn.BorderSizePixel = 0
-TechBtn.Text = "Tech (3)"
-TechBtn.TextColor3 = Color3.fromRGB(180, 180, 200)
-TechBtn.Font = Enum.Font.GothamBold
-TechBtn.TextSize = 11
-TechBtn.AutoButtonColor = false
-TechBtn.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = TechBtn
-end
-
--- Distance
-local MobDistLabel = Instance.new("TextLabel")
-MobDistLabel.Size = UDim2.new(0, 180, 0, 20)
-MobDistLabel.Position = UDim2.new(0, 0, 0, 208)
-MobDistLabel.BackgroundTransparency = 1
-MobDistLabel.Text = "Below mob: " .. tostring(math.abs(MOB_FLY_OFFSET.Y)) .. " studs"
-MobDistLabel.TextColor3 = Color3.fromRGB(160, 180, 220)
-MobDistLabel.TextXAlignment = Enum.TextXAlignment.Left
-MobDistLabel.Font = Enum.Font.Gotham
-MobDistLabel.TextSize = 12
-MobDistLabel.Parent = MobPage
-
-local MobDistDownBtn = Instance.new("TextButton")
-MobDistDownBtn.Size = UDim2.new(0, 30, 0, 20)
-MobDistDownBtn.Position = UDim2.new(0, 186, 0, 208)
-MobDistDownBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-MobDistDownBtn.BorderSizePixel = 0
-MobDistDownBtn.Text = "-"
-MobDistDownBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-MobDistDownBtn.Font = Enum.Font.GothamBold
-MobDistDownBtn.TextSize = 13
-MobDistDownBtn.AutoButtonColor = false
-MobDistDownBtn.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = MobDistDownBtn
-end
-
-local MobDistUpBtn = Instance.new("TextButton")
-MobDistUpBtn.Size = UDim2.new(0, 30, 0, 20)
-MobDistUpBtn.Position = UDim2.new(0, 220, 0, 208)
-MobDistUpBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-MobDistUpBtn.BorderSizePixel = 0
-MobDistUpBtn.Text = "+"
-MobDistUpBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-MobDistUpBtn.Font = Enum.Font.GothamBold
-MobDistUpBtn.TextSize = 13
-MobDistUpBtn.AutoButtonColor = false
-MobDistUpBtn.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = MobDistUpBtn
-end
-
--- Attack speed
-local MobAtkLabel = Instance.new("TextLabel")
-MobAtkLabel.Size = UDim2.new(0, 180, 0, 20)
-MobAtkLabel.Position = UDim2.new(0, 0, 0, 232)
-MobAtkLabel.BackgroundTransparency = 1
-MobAtkLabel.Text = "Attack Speed: " .. string.format("%.2f", MOB_ATTACK_INTERVAL) .. "s"
-MobAtkLabel.TextColor3 = Color3.fromRGB(160, 180, 220)
-MobAtkLabel.TextXAlignment = Enum.TextXAlignment.Left
-MobAtkLabel.Font = Enum.Font.Gotham
-MobAtkLabel.TextSize = 12
-MobAtkLabel.Parent = MobPage
-
-local MobAtkDownBtn = Instance.new("TextButton")
-MobAtkDownBtn.Size = UDim2.new(0, 30, 0, 20)
-MobAtkDownBtn.Position = UDim2.new(0, 186, 0, 232)
-MobAtkDownBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-MobAtkDownBtn.BorderSizePixel = 0
-MobAtkDownBtn.Text = "-"
-MobAtkDownBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-MobAtkDownBtn.Font = Enum.Font.GothamBold
-MobAtkDownBtn.TextSize = 13
-MobAtkDownBtn.AutoButtonColor = false
-MobAtkDownBtn.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = MobAtkDownBtn
-end
-
-local MobAtkUpBtn = Instance.new("TextButton")
-MobAtkUpBtn.Size = UDim2.new(0, 30, 0, 20)
-MobAtkUpBtn.Position = UDim2.new(0, 220, 0, 232)
-MobAtkUpBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-MobAtkUpBtn.BorderSizePixel = 0
-MobAtkUpBtn.Text = "+"
-MobAtkUpBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-MobAtkUpBtn.Font = Enum.Font.GothamBold
-MobAtkUpBtn.TextSize = 13
-MobAtkUpBtn.AutoButtonColor = false
-MobAtkUpBtn.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = MobAtkUpBtn
-end
-
--- Status + buttons
-local MobStatusLabel = Instance.new("TextLabel")
-MobStatusLabel.Size = UDim2.new(1, 0, 0, 16)
-MobStatusLabel.Position = UDim2.new(0, 0, 0, 256)
-MobStatusLabel.BackgroundTransparency = 1
-MobStatusLabel.Text = "Status: Idle"
-MobStatusLabel.TextColor3 = Color3.fromRGB(140, 150, 180)
-MobStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
-MobStatusLabel.Font = Enum.Font.Gotham
-MobStatusLabel.TextSize = 11
-MobStatusLabel.Parent = MobPage
-
-local MobFarmBtn = Instance.new("TextButton")
-MobFarmBtn.Size = UDim2.new(0.48, 0, 0, 34)
-MobFarmBtn.Position = UDim2.new(0, 0, 0, 276)
-MobFarmBtn.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
-MobFarmBtn.BorderSizePixel = 0
-MobFarmBtn.Text = ">  Mob Farm"
-MobFarmBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-MobFarmBtn.Font = Enum.Font.GothamBold
-MobFarmBtn.TextSize = 13
-MobFarmBtn.AutoButtonColor = false
-MobFarmBtn.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 8)
-        corner.Parent = MobFarmBtn
-end
-
-local MobAllBtn = Instance.new("TextButton")
-MobAllBtn.Size = UDim2.new(0.48, 0, 0, 34)
-MobAllBtn.Position = UDim2.new(0.52, 0, 0, 276)
-MobAllBtn.BackgroundColor3 = Color3.fromRGB(140, 80, 180)
-MobAllBtn.BorderSizePixel = 0
-MobAllBtn.Text = "[M]  All Mobs"
-MobAllBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-MobAllBtn.Font = Enum.Font.GothamBold
-MobAllBtn.TextSize = 13
-MobAllBtn.AutoButtonColor = false
-MobAllBtn.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = MobAllBtn
-end
+local parryCard = card(PlayerPage, 1, "Auto Parry")
+caption(parryCard, 1, "Blocks enemy attacks automatically using a 2-layer detector (attack-warning remote + animation watch).")
+local AutoParryBtn = actionButton(parryCard, 2, "Auto Parry: OFF")
+caption(parryCard, 3, "Hold: " .. tostring(PARRY_HOLD_TIME) .. "s   |   Cooldown: " .. tostring(PARRY_COOLDOWN) .. "s")
+local ParryStatus = statusLabel(parryCard, 4, "Status: Idle")
+
+local spamCard = card(PlayerPage, 2, "Spam Parry")
+caption(spamCard, 1, "Holds and releases block in a continuous loop.")
+local SpamParryBtn = actionButton(spamCard, 2, "Spam Parry: OFF")
+local SpamParryDownBtn, SpamParryUpBtn, SpamParryLenLabel = stepper(spamCard, 3, "Hold length: " .. string.format("%.2f", State.spamParryLength) .. "s", 0.1, 0.7)
+local SpamParryStatus = statusLabel(spamCard, 4, "Idle")
+
+local fishCard = card(PlayerPage, 3, "Auto Fishing")
+local RodNameBox = textInput(fishCard, 1, "Rod name (e.g. Rod of Kings)", "Rod of Kings")
+local FishWaitDownBtn, FishWaitUpBtn, FishWaitLabel = stepper(fishCard, 2, "Wait before reel: " .. string.format("%.2f", State.fishWaitSeconds) .. " sec", 0.1, 15)
+local AutoFishBtn = actionButton(fishCard, 3, "Start Auto Fish", "primary")
+local FishStatus = statusLabel(fishCard, 4, "Status: Idle")
 
 -- ================================================================
--- // CAMP FARM SECTION (auto-kill mobs within radius of a set point)
+-- // AUTO PAGE (ore mining + gold deposit)
 -- ================================================================
+local AutoPage = newPage("Auto")
 
-local CampDivider = Instance.new("Frame")
-CampDivider.Size = UDim2.new(1, 0, 0, 1)
-CampDivider.Position = UDim2.new(0, 0, 0, 318)
-CampDivider.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-CampDivider.BorderSizePixel = 0
-CampDivider.Parent = MobPage
+local oreCard = card(AutoPage, 1, "Ore Selection")
+local SearchBox, SelectAllBtn, DeselectAllBtn, OreScroll, SelectedLabel = searchSection(oreCard, 1, "Search ores...")
 
-local CampTitle = Instance.new("TextLabel")
-CampTitle.Size = UDim2.new(1, 0, 0, 18)
-CampTitle.Position = UDim2.new(0, 0, 0, 324)
-CampTitle.BackgroundTransparency = 1
-CampTitle.Text = "Camp Farm (kill mobs in radius)"
-CampTitle.TextColor3 = Color3.fromRGB(255, 160, 200)
-CampTitle.TextXAlignment = Enum.TextXAlignment.Left
-CampTitle.Font = Enum.Font.GothamBold
-CampTitle.TextSize = 13
-CampTitle.Parent = MobPage
+local mineCard = card(AutoPage, 2, "Mining")
+local mineRow = new("Frame", { Size = UDim2.new(1, 0, 0, 40), BackgroundTransparency = 1, LayoutOrder = 1 }, mineCard)
+new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, mineRow)
+local AutoFarmBtn = new("TextButton", {
+	Size = UDim2.new(0.62, -4, 1, 0), BackgroundColor3 = Theme.Accent, BorderSizePixel = 0,
+	Text = "Auto Farm", Font = Theme.FontBold, TextSize = 13, TextColor3 = Theme.AccentText,
+	AutoButtonColor = false, LayoutOrder = 1,
+}, mineRow)
+corner(AutoFarmBtn, 12); polish(AutoFarmBtn)
+local AllOresBtn = new("TextButton", {
+	Size = UDim2.new(0.38, -4, 1, 0), BackgroundColor3 = Theme.Elevated, BorderSizePixel = 0,
+	Text = "All Ores", Font = Theme.FontBold, TextSize = 13, TextColor3 = Theme.Text,
+	AutoButtonColor = false, LayoutOrder = 2,
+}, mineRow)
+corner(AllOresBtn, 12); polish(AllOresBtn)
+local StatusLabel = statusLabel(mineCard, 2, "Status: Idle | Fly: OFF")
 
--- Weapon name input + equip button
-local WeaponNameBox = Instance.new("TextBox")
-WeaponNameBox.Size = UDim2.new(0.62, 0, 0, 26)
-WeaponNameBox.Position = UDim2.new(0, 0, 0, 346)
-WeaponNameBox.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
-WeaponNameBox.BorderSizePixel = 0
-WeaponNameBox.PlaceholderText = "Weapon name (e.g. Sword)"
-WeaponNameBox.PlaceholderColor3 = Color3.fromRGB(90, 100, 130)
-WeaponNameBox.TextColor3 = Color3.fromRGB(220, 230, 255)
-WeaponNameBox.Font = Enum.Font.Gotham
-WeaponNameBox.TextSize = 12
-WeaponNameBox.ClearTextOnFocus = false
-WeaponNameBox.Parent = MobPage
+local goldCard = card(AutoPage, 3, "Auto Deposit Gold")
+local AutoDepositBtn = actionButton(goldCard, 1, "Auto Deposit: OFF")
+local GoldThreshDownBtn, GoldThreshUpBtn, GoldThresholdLabel = stepper(goldCard, 2, "Cooldown: " .. string.format("%.1f", AUTO_DEPOSIT_COOLDOWN) .. "s", 0.5, 30)
+local GoldStatus = statusLabel(goldCard, 3, "Status: Idle")
 
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = WeaponNameBox
-end
+-- ================================================================
+-- // MOB PAGE (mob farm, camp farm, attack position, auto bow)
+-- ================================================================
+local MobPage = newPage("Mob")
 
-local WNPad = Instance.new("UIPadding")
-WNPad.PaddingLeft = UDim.new(0, 8)
-WNPad.Parent = WeaponNameBox
+local mobSelCard = card(MobPage, 1, "Mob Selection")
+local MobSearchBox, MobSelAllBtn, MobClrAllBtn, MobScroll, MobSelectedLabel = searchSection(mobSelCard, 1, "Search mobs...")
 
-local EquipWeaponBtn = Instance.new("TextButton")
-EquipWeaponBtn.Size = UDim2.new(0.36, 0, 0, 26)
-EquipWeaponBtn.Position = UDim2.new(0.64, 0, 0, 346)
-EquipWeaponBtn.BackgroundColor3 = Color3.fromRGB(60, 100, 160)
-EquipWeaponBtn.BorderSizePixel = 0
-EquipWeaponBtn.Text = "Equip"
-EquipWeaponBtn.TextColor3 = Color3.fromRGB(220, 230, 255)
-EquipWeaponBtn.Font = Enum.Font.GothamBold
-EquipWeaponBtn.TextSize = 12
-EquipWeaponBtn.AutoButtonColor = false
-EquipWeaponBtn.Parent = MobPage
+local atkTypeCard = card(MobPage, 2, "Attack Type & Range")
+local LightBtn, HeavyBtn, TechBtn = segmented(atkTypeCard, 1, { "Light", "Heavy", "Technique" })
+local MobDistDownBtn, MobDistUpBtn, MobDistLabel = stepper(atkTypeCard, 2, "Below mob: " .. tostring(math.abs(MOB_FLY_OFFSET.Y)) .. " studs", 1, 20)
+local MobAtkDownBtn, MobAtkUpBtn, MobAtkLabel = stepper(atkTypeCard, 3, "Attack Speed: " .. string.format("%.2f", MOB_ATTACK_INTERVAL) .. "s", 0.1, 2.0)
 
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = EquipWeaponBtn
-end
+local mobFarmCard = card(MobPage, 3, "Mob Farm")
+local MobStatusLabel = statusLabel(mobFarmCard, 1, "Status: Idle")
+local mobFarmRow = new("Frame", { Size = UDim2.new(1, 0, 0, 40), BackgroundTransparency = 1, LayoutOrder = 2 }, mobFarmCard)
+new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, mobFarmRow)
+local MobFarmBtn = new("TextButton", {
+	Size = UDim2.new(0.62, -4, 1, 0), BackgroundColor3 = Theme.Accent, BorderSizePixel = 0,
+	Text = "Mob Farm", Font = Theme.FontBold, TextSize = 13, TextColor3 = Theme.AccentText,
+	AutoButtonColor = false, LayoutOrder = 1,
+}, mobFarmRow)
+corner(MobFarmBtn, 12); polish(MobFarmBtn)
+local MobAllBtn = new("TextButton", {
+	Size = UDim2.new(0.38, -4, 1, 0), BackgroundColor3 = Theme.Elevated, BorderSizePixel = 0,
+	Text = "All Mobs", Font = Theme.FontBold, TextSize = 13, TextColor3 = Theme.Text,
+	AutoButtonColor = false, LayoutOrder = 2,
+}, mobFarmRow)
+corner(MobAllBtn, 12); polish(MobAllBtn)
 
--- Set Point button + status
-local SetPointBtn = Instance.new("TextButton")
-SetPointBtn.Size = UDim2.new(0.48, 0, 0, 28)
-SetPointBtn.Position = UDim2.new(0, 0, 0, 378)
-SetPointBtn.BackgroundColor3 = Color3.fromRGB(120, 60, 100)
-SetPointBtn.BorderSizePixel = 0
-SetPointBtn.Text = "Set Point (here)"
-SetPointBtn.TextColor3 = Color3.fromRGB(255, 230, 240)
-SetPointBtn.Font = Enum.Font.GothamBold
-SetPointBtn.TextSize = 12
-SetPointBtn.AutoButtonColor = false
-SetPointBtn.Parent = MobPage
+local campCard = card(MobPage, 4, "Camp Farm")
+local WeaponNameBox, EquipWeaponBtn = inputWithButton(campCard, 1, "Weapon name", "", "Equip")
+local pointRow = new("Frame", { Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1, LayoutOrder = 2 }, campCard)
+new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, pointRow)
+local SetPointBtn = new("TextButton", {
+	Size = UDim2.new(0.5, -4, 1, 0), BackgroundColor3 = Theme.Elevated, BorderSizePixel = 0,
+	Text = "Set Point (here)", Font = Theme.FontBold, TextSize = 12, TextColor3 = Theme.Text,
+	AutoButtonColor = false, LayoutOrder = 1,
+}, pointRow)
+corner(SetPointBtn, 10); polish(SetPointBtn, { noScale = true })
+local ClearPointBtn = new("TextButton", {
+	Size = UDim2.new(0.5, -4, 1, 0), BackgroundColor3 = Theme.Elevated, BorderSizePixel = 0,
+	Text = "Clear Point", Font = Theme.FontBold, TextSize = 12, TextColor3 = Theme.Text,
+	AutoButtonColor = false, LayoutOrder = 2,
+}, pointRow)
+corner(ClearPointBtn, 10); polish(ClearPointBtn, { noScale = true })
+local CampRadiusDownBtn, CampRadiusUpBtn, CampRadiusLabel = stepper(campCard, 3, "Radius: " .. tostring(State.campRadius) .. " studs", 5, 200)
+local CampStatusLabel = statusLabel(campCard, 4, "Camp: Idle")
+local CampFarmBtn = actionButton(campCard, 5, "Start Camp Farm", "primary")
 
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = SetPointBtn
-end
+local atkPosCard = card(MobPage, 5, "Attack Position")
+caption(atkPosCard, 1, "Applies to both Mob Farm and Camp Farm.")
+local AtkPosBelowBtn, AtkPosAboveBtn, AtkPosBehindBtn, AtkPosFrontBtn, AtkPosCustomBtn =
+	segmented(atkPosCard, 2, { "Below", "Above", "Behind", "Front", "Custom" }, { height = 40, textSize = 11 })
+local BelowAboveDistDownBtn, BelowAboveDistUpBtn, BelowAboveDistLabel = stepper(atkPosCard, 3, "Below/Above dist: " .. tostring(BELOW_DISTANCE) .. " studs", 1, 20)
+local BehindDistDownBtn, BehindDistUpBtn, BehindDistLabel = stepper(atkPosCard, 4, "Behind/Front dist: " .. tostring(BEHIND_DISTANCE) .. " studs", 1, 20)
+local CustomOffsetBox, CustomOffsetApplyBtn = inputWithButton(atkPosCard, 5, "Custom offset: x,y,z", "", "Apply")
 
-local ClearPointBtn = Instance.new("TextButton")
-ClearPointBtn.Size = UDim2.new(0.48, 0, 0, 28)
-ClearPointBtn.Position = UDim2.new(0.52, 0, 0, 378)
-ClearPointBtn.BackgroundColor3 = Color3.fromRGB(80, 50, 60)
-ClearPointBtn.BorderSizePixel = 0
-ClearPointBtn.Text = "Clear Point"
-ClearPointBtn.TextColor3 = Color3.fromRGB(220, 200, 210)
-ClearPointBtn.Font = Enum.Font.GothamBold
-ClearPointBtn.TextSize = 12
-ClearPointBtn.AutoButtonColor = false
-ClearPointBtn.Parent = MobPage
+local bowCard = card(MobPage, 6, "Auto Bow")
+local BowNameBox = textInput(bowCard, 1, "Bow name", "")
+local BowRateDownBtn, BowRateUpBtn, BowRateLabel = stepper(bowCard, 2, "Bow Shoot Rate: " .. string.format("%.2f", State.bowShootRate) .. "s", 0.05, 2.0)
+local AutoBowBtn = actionButton(bowCard, 3, "Start Auto Bow", "primary")
+local BowAutoEquipBtn = actionButton(bowCard, 4, "Auto-Equip: OFF (manual hold only)")
+local BowStatus = statusLabel(bowCard, 5, "Idle")
 
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = ClearPointBtn
-end
-
--- Radius adjuster
-local CampRadiusLabel = Instance.new("TextLabel")
-CampRadiusLabel.Size = UDim2.new(0, 180, 0, 20)
-CampRadiusLabel.Position = UDim2.new(0, 0, 0, 412)
-CampRadiusLabel.BackgroundTransparency = 1
-CampRadiusLabel.Text = "Radius: 30 studs"
-CampRadiusLabel.TextColor3 = Color3.fromRGB(160, 180, 220)
-CampRadiusLabel.TextXAlignment = Enum.TextXAlignment.Left
-CampRadiusLabel.Font = Enum.Font.Gotham
-CampRadiusLabel.TextSize = 12
-CampRadiusLabel.Parent = MobPage
-
-local CampRadiusDownBtn = Instance.new("TextButton")
-CampRadiusDownBtn.Size = UDim2.new(0, 30, 0, 20)
-CampRadiusDownBtn.Position = UDim2.new(0, 186, 0, 412)
-CampRadiusDownBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-CampRadiusDownBtn.BorderSizePixel = 0
-CampRadiusDownBtn.Text = "-"
-CampRadiusDownBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-CampRadiusDownBtn.Font = Enum.Font.GothamBold
-CampRadiusDownBtn.TextSize = 13
-CampRadiusDownBtn.AutoButtonColor = false
-CampRadiusDownBtn.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = CampRadiusDownBtn
-end
-
-local CampRadiusUpBtn = Instance.new("TextButton")
-CampRadiusUpBtn.Size = UDim2.new(0, 30, 0, 20)
-CampRadiusUpBtn.Position = UDim2.new(0, 220, 0, 412)
-CampRadiusUpBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-CampRadiusUpBtn.BorderSizePixel = 0
-CampRadiusUpBtn.Text = "+"
-CampRadiusUpBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-CampRadiusUpBtn.Font = Enum.Font.GothamBold
-CampRadiusUpBtn.TextSize = 13
-CampRadiusUpBtn.AutoButtonColor = false
-CampRadiusUpBtn.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = CampRadiusUpBtn
-end
-
--- Camp status + start/stop button
-local CampStatusLabel = Instance.new("TextLabel")
-CampStatusLabel.Size = UDim2.new(1, 0, 0, 16)
-CampStatusLabel.Position = UDim2.new(0, 0, 0, 436)
-CampStatusLabel.BackgroundTransparency = 1
-CampStatusLabel.Text = "Camp: Idle | Point: not set"
-CampStatusLabel.TextColor3 = Color3.fromRGB(140, 150, 180)
-CampStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
-CampStatusLabel.Font = Enum.Font.Gotham
-CampStatusLabel.TextSize = 10
-CampStatusLabel.Parent = MobPage
-
-local CampFarmBtn = Instance.new("TextButton")
-CampFarmBtn.Size = UDim2.new(1, 0, 0, 32)
-CampFarmBtn.Position = UDim2.new(0, 0, 0, 456)
-CampFarmBtn.BackgroundColor3 = Color3.fromRGB(180, 80, 120)
-CampFarmBtn.BorderSizePixel = 0
-CampFarmBtn.Text = ">  Start Camp Farm"
-CampFarmBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-CampFarmBtn.Font = Enum.Font.GothamBold
-CampFarmBtn.TextSize = 13
-CampFarmBtn.AutoButtonColor = false
-CampFarmBtn.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 8)
-        corner.Parent = CampFarmBtn
-end
-
--- Attack position selector (applies to BOTH mob farm and camp farm)
-local AtkPosLabel = Instance.new("TextLabel")
-AtkPosLabel.Size = UDim2.new(1, 0, 0, 18)
-AtkPosLabel.Position = UDim2.new(0, 0, 0, 496)
-AtkPosLabel.BackgroundTransparency = 1
-AtkPosLabel.Text = "Attack from position:"
-AtkPosLabel.TextColor3 = Color3.fromRGB(160, 180, 220)
-AtkPosLabel.TextXAlignment = Enum.TextXAlignment.Left
-AtkPosLabel.Font = Enum.Font.Gotham
-AtkPosLabel.TextSize = 12
-AtkPosLabel.Parent = MobPage
-
--- 5 position buttons (Below / Above / Behind / Front / Custom), each 0.19 wide with 0.01 gaps
-local AtkPosBelowBtn = Instance.new("TextButton")
-AtkPosBelowBtn.Size = UDim2.new(0.19, 0, 0, 28)
-AtkPosBelowBtn.Position = UDim2.new(0, 0, 0, 516)
-AtkPosBelowBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 80)
-AtkPosBelowBtn.BorderSizePixel = 0
-AtkPosBelowBtn.Text = "Below"
-AtkPosBelowBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-AtkPosBelowBtn.Font = Enum.Font.GothamBold
-AtkPosBelowBtn.TextSize = 10
-AtkPosBelowBtn.AutoButtonColor = false
-AtkPosBelowBtn.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = AtkPosBelowBtn
-end
-
-local AtkPosAboveBtn = Instance.new("TextButton")
-AtkPosAboveBtn.Size = UDim2.new(0.19, 0, 0, 28)
-AtkPosAboveBtn.Position = UDim2.new(0.20, 0, 0, 516)
-AtkPosAboveBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-AtkPosAboveBtn.BorderSizePixel = 0
-AtkPosAboveBtn.Text = "Above"
-AtkPosAboveBtn.TextColor3 = Color3.fromRGB(220, 220, 240)
-AtkPosAboveBtn.Font = Enum.Font.GothamBold
-AtkPosAboveBtn.TextSize = 10
-AtkPosAboveBtn.AutoButtonColor = false
-AtkPosAboveBtn.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = AtkPosAboveBtn
-end
-
-local AtkPosBehindBtn = Instance.new("TextButton")
-AtkPosBehindBtn.Size = UDim2.new(0.19, 0, 0, 28)
-AtkPosBehindBtn.Position = UDim2.new(0.40, 0, 0, 516)
-AtkPosBehindBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-AtkPosBehindBtn.BorderSizePixel = 0
-AtkPosBehindBtn.Text = "Behind"
-AtkPosBehindBtn.TextColor3 = Color3.fromRGB(220, 220, 240)
-AtkPosBehindBtn.Font = Enum.Font.GothamBold
-AtkPosBehindBtn.TextSize = 10
-AtkPosBehindBtn.AutoButtonColor = false
-AtkPosBehindBtn.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = AtkPosBehindBtn
-end
-
-local AtkPosFrontBtn = Instance.new("TextButton")
-AtkPosFrontBtn.Size = UDim2.new(0.19, 0, 0, 28)
-AtkPosFrontBtn.Position = UDim2.new(0.60, 0, 0, 516)
-AtkPosFrontBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-AtkPosFrontBtn.BorderSizePixel = 0
-AtkPosFrontBtn.Text = "Front"
-AtkPosFrontBtn.TextColor3 = Color3.fromRGB(220, 220, 240)
-AtkPosFrontBtn.Font = Enum.Font.GothamBold
-AtkPosFrontBtn.TextSize = 10
-AtkPosFrontBtn.AutoButtonColor = false
-AtkPosFrontBtn.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = AtkPosFrontBtn
-end
-
-local AtkPosCustomBtn = Instance.new("TextButton")
-AtkPosCustomBtn.Size = UDim2.new(0.19, 0, 0, 28)
-AtkPosCustomBtn.Position = UDim2.new(0.80, 0, 0, 516)
-AtkPosCustomBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-AtkPosCustomBtn.BorderSizePixel = 0
-AtkPosCustomBtn.Text = "Custom"
-AtkPosCustomBtn.TextColor3 = Color3.fromRGB(220, 220, 240)
-AtkPosCustomBtn.Font = Enum.Font.GothamBold
-AtkPosCustomBtn.TextSize = 10
-AtkPosCustomBtn.AutoButtonColor = false
-AtkPosCustomBtn.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = AtkPosCustomBtn
-end
-
--- Below/Above distance adjuster (row 1)
-local BelowAboveDistLabel = Instance.new("TextLabel")
-BelowAboveDistLabel.Size = UDim2.new(0, 180, 0, 20)
-BelowAboveDistLabel.Position = UDim2.new(0, 0, 0, 552)
-BelowAboveDistLabel.BackgroundTransparency = 1
-BelowAboveDistLabel.Text = "Below/Above dist: 3 studs"
-BelowAboveDistLabel.TextColor3 = Color3.fromRGB(160, 180, 220)
-BelowAboveDistLabel.TextXAlignment = Enum.TextXAlignment.Left
-BelowAboveDistLabel.Font = Enum.Font.Gotham
-BelowAboveDistLabel.TextSize = 12
-BelowAboveDistLabel.Parent = MobPage
-
-local BelowAboveDistDownBtn = Instance.new("TextButton")
-BelowAboveDistDownBtn.Size = UDim2.new(0, 30, 0, 20)
-BelowAboveDistDownBtn.Position = UDim2.new(0, 186, 0, 552)
-BelowAboveDistDownBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-BelowAboveDistDownBtn.BorderSizePixel = 0
-BelowAboveDistDownBtn.Text = "-"
-BelowAboveDistDownBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-BelowAboveDistDownBtn.Font = Enum.Font.GothamBold
-BelowAboveDistDownBtn.TextSize = 13
-BelowAboveDistDownBtn.AutoButtonColor = false
-BelowAboveDistDownBtn.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = BelowAboveDistDownBtn
-end
-
-local BelowAboveDistUpBtn = Instance.new("TextButton")
-BelowAboveDistUpBtn.Size = UDim2.new(0, 30, 0, 20)
-BelowAboveDistUpBtn.Position = UDim2.new(0, 220, 0, 552)
-BelowAboveDistUpBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-BelowAboveDistUpBtn.BorderSizePixel = 0
-BelowAboveDistUpBtn.Text = "+"
-BelowAboveDistUpBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-BelowAboveDistUpBtn.Font = Enum.Font.GothamBold
-BelowAboveDistUpBtn.TextSize = 13
-BelowAboveDistUpBtn.AutoButtonColor = false
-BelowAboveDistUpBtn.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = BelowAboveDistUpBtn
-end
-
--- Behind/Front distance adjuster (row 2)
-local BehindDistLabel = Instance.new("TextLabel")
-BehindDistLabel.Size = UDim2.new(0, 180, 0, 20)
-BehindDistLabel.Position = UDim2.new(0, 0, 0, 580)
-BehindDistLabel.BackgroundTransparency = 1
-BehindDistLabel.Text = "Behind/Front dist: 4 studs"
-BehindDistLabel.TextColor3 = Color3.fromRGB(160, 180, 220)
-BehindDistLabel.TextXAlignment = Enum.TextXAlignment.Left
-BehindDistLabel.Font = Enum.Font.Gotham
-BehindDistLabel.TextSize = 12
-BehindDistLabel.Parent = MobPage
-
-local BehindDistDownBtn = Instance.new("TextButton")
-BehindDistDownBtn.Size = UDim2.new(0, 30, 0, 20)
-BehindDistDownBtn.Position = UDim2.new(0, 186, 0, 580)
-BehindDistDownBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-BehindDistDownBtn.BorderSizePixel = 0
-BehindDistDownBtn.Text = "-"
-BehindDistDownBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-BehindDistDownBtn.Font = Enum.Font.GothamBold
-BehindDistDownBtn.TextSize = 13
-BehindDistDownBtn.AutoButtonColor = false
-BehindDistDownBtn.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = BehindDistDownBtn
-end
-
-local BehindDistUpBtn = Instance.new("TextButton")
-BehindDistUpBtn.Size = UDim2.new(0, 30, 0, 20)
-BehindDistUpBtn.Position = UDim2.new(0, 220, 0, 580)
-BehindDistUpBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-BehindDistUpBtn.BorderSizePixel = 0
-BehindDistUpBtn.Text = "+"
-BehindDistUpBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-BehindDistUpBtn.Font = Enum.Font.GothamBold
-BehindDistUpBtn.TextSize = 13
-BehindDistUpBtn.AutoButtonColor = false
-BehindDistUpBtn.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = BehindDistUpBtn
-end
-
--- Custom offset input (row 3) - text box where user types "x,y,z"
-local CustomOffsetLabel = Instance.new("TextLabel")
-CustomOffsetLabel.Size = UDim2.new(1, 0, 0, 16)
-CustomOffsetLabel.Position = UDim2.new(0, 0, 0, 608)
-CustomOffsetLabel.BackgroundTransparency = 1
-CustomOffsetLabel.Text = "Custom offset (x,y,z):"
-CustomOffsetLabel.TextColor3 = Color3.fromRGB(160, 180, 220)
-CustomOffsetLabel.TextXAlignment = Enum.TextXAlignment.Left
-CustomOffsetLabel.Font = Enum.Font.Gotham
-CustomOffsetLabel.TextSize = 11
-CustomOffsetLabel.Parent = MobPage
-
-local CustomOffsetBox = Instance.new("TextBox")
-CustomOffsetBox.Size = UDim2.new(0.62, 0, 0, 24)
-CustomOffsetBox.Position = UDim2.new(0, 0, 0, 626)
-CustomOffsetBox.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
-CustomOffsetBox.BorderSizePixel = 0
-CustomOffsetBox.PlaceholderText = "e.g. 10,10,4"
-CustomOffsetBox.PlaceholderColor3 = Color3.fromRGB(90, 100, 130)
-CustomOffsetBox.Text = "0,-3,0"
-CustomOffsetBox.TextColor3 = Color3.fromRGB(220, 230, 255)
-CustomOffsetBox.Font = Enum.Font.Gotham
-CustomOffsetBox.TextSize = 12
-CustomOffsetBox.ClearTextOnFocus = false
-CustomOffsetBox.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = CustomOffsetBox
-end
-
-local COBPad = Instance.new("UIPadding")
-COBPad.PaddingLeft = UDim.new(0, 8)
-COBPad.Parent = CustomOffsetBox
-
-local CustomOffsetApplyBtn = Instance.new("TextButton")
-CustomOffsetApplyBtn.Size = UDim2.new(0.36, 0, 0, 24)
-CustomOffsetApplyBtn.Position = UDim2.new(0.64, 0, 0, 626)
-CustomOffsetApplyBtn.BackgroundColor3 = Color3.fromRGB(60, 100, 160)
-CustomOffsetApplyBtn.BorderSizePixel = 0
-CustomOffsetApplyBtn.Text = "Apply"
-CustomOffsetApplyBtn.TextColor3 = Color3.fromRGB(220, 230, 255)
-CustomOffsetApplyBtn.Font = Enum.Font.GothamBold
-CustomOffsetApplyBtn.TextSize = 12
-CustomOffsetApplyBtn.AutoButtonColor = false
-CustomOffsetApplyBtn.Parent = MobPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = CustomOffsetApplyBtn
-end
-
--- ===== AUTO BOW SHOOT SECTION =====
-local BowDivider = Instance.new("Frame")
-BowDivider.Size = UDim2.new(1, 0, 0, 1)
-BowDivider.Position = UDim2.new(0, 0, 0, 660)
-BowDivider.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-BowDivider.BorderSizePixel = 0
-BowDivider.Parent = MobPage
-
-local BowTitle = Instance.new("TextLabel")
-BowTitle.Size = UDim2.new(1, 0, 0, 18)
-BowTitle.Position = UDim2.new(0, 0, 0, 666)
-BowTitle.BackgroundTransparency = 1
-BowTitle.Text = "Auto Bow Shoot (aims at selected mobs)"
-BowTitle.TextColor3 = Color3.fromRGB(180, 220, 255)
-BowTitle.TextXAlignment = Enum.TextXAlignment.Left
-BowTitle.Font = Enum.Font.GothamBold
-BowTitle.TextSize = 13
-BowTitle.Parent = MobPage
-
--- Bow name input
-local BowNameBox = Instance.new("TextBox")
-BowNameBox.Size = UDim2.new(0.62, 0, 0, 26)
-BowNameBox.Position = UDim2.new(0, 0, 0, 688)
-BowNameBox.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
-BowNameBox.BorderSizePixel = 0
-BowNameBox.PlaceholderText = "Bow name (e.g. Prism Bow)"
-BowNameBox.PlaceholderColor3 = Color3.fromRGB(90, 100, 130)
-BowNameBox.Text = "Prism Bow"
-BowNameBox.TextColor3 = Color3.fromRGB(220, 230, 255)
-BowNameBox.Font = Enum.Font.Gotham
-BowNameBox.TextSize = 12
-BowNameBox.ClearTextOnFocus = false
-BowNameBox.Parent = MobPage
-
-do
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, 6)
-        c.Parent = BowNameBox
-end
-do
-        local p = Instance.new("UIPadding")
-        p.PaddingLeft = UDim.new(0, 8)
-        p.Parent = BowNameBox
-end
-
--- Shoot rate label + adjusters
-local BowRateLabel = Instance.new("TextLabel")
-BowRateLabel.Size = UDim2.new(0, 180, 0, 20)
-BowRateLabel.Position = UDim2.new(0, 0, 0, 720)
-BowRateLabel.BackgroundTransparency = 1
-BowRateLabel.Text = "Bow Shoot Rate: 0.10s"
-BowRateLabel.TextColor3 = Color3.fromRGB(160, 180, 220)
-BowRateLabel.TextXAlignment = Enum.TextXAlignment.Left
-BowRateLabel.Font = Enum.Font.Gotham
-BowRateLabel.TextSize = 12
-BowRateLabel.Parent = MobPage
-
-local BowRateDownBtn = Instance.new("TextButton")
-BowRateDownBtn.Size = UDim2.new(0, 30, 0, 20)
-BowRateDownBtn.Position = UDim2.new(0, 186, 0, 720)
-BowRateDownBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-BowRateDownBtn.BorderSizePixel = 0
-BowRateDownBtn.Text = "-"
-BowRateDownBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-BowRateDownBtn.Font = Enum.Font.GothamBold
-BowRateDownBtn.TextSize = 13
-BowRateDownBtn.AutoButtonColor = false
-BowRateDownBtn.Parent = MobPage
-
-do
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, 6)
-        c.Parent = BowRateDownBtn
-end
-
-local BowRateUpBtn = Instance.new("TextButton")
-BowRateUpBtn.Size = UDim2.new(0, 30, 0, 20)
-BowRateUpBtn.Position = UDim2.new(0, 220, 0, 720)
-BowRateUpBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-BowRateUpBtn.BorderSizePixel = 0
-BowRateUpBtn.Text = "+"
-BowRateUpBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-BowRateUpBtn.Font = Enum.Font.GothamBold
-BowRateUpBtn.TextSize = 13
-BowRateUpBtn.AutoButtonColor = false
-BowRateUpBtn.Parent = MobPage
-
-do
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, 6)
-        c.Parent = BowRateUpBtn
-end
-
--- Start/Stop Auto Bow button
-local AutoBowBtn = Instance.new("TextButton")
-AutoBowBtn.Size = UDim2.new(1, 0, 0, 34)
-AutoBowBtn.Position = UDim2.new(0, 0, 0, 746)
-AutoBowBtn.BackgroundColor3 = Color3.fromRGB(80, 100, 160)
-AutoBowBtn.BorderSizePixel = 0
-AutoBowBtn.Text = ">  Start Auto Bow"
-AutoBowBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-AutoBowBtn.Font = Enum.Font.GothamBold
-AutoBowBtn.TextSize = 13
-AutoBowBtn.AutoButtonColor = false
-AutoBowBtn.Parent = MobPage
-
-do
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, 8)
-        c.Parent = AutoBowBtn
-end
-
--- Auto-Equip toggle: ON = auto-equip bow from backpack, OFF = only shoot if already held
-local BowAutoEquipBtn = Instance.new("TextButton")
-BowAutoEquipBtn.Size = UDim2.new(1, 0, 0, 28)
-BowAutoEquipBtn.Position = UDim2.new(0, 0, 0, 784)
-BowAutoEquipBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-BowAutoEquipBtn.BorderSizePixel = 0
-BowAutoEquipBtn.Text = "Auto-Equip: OFF (manual hold only)"
-BowAutoEquipBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-BowAutoEquipBtn.Font = Enum.Font.GothamBold
-BowAutoEquipBtn.TextSize = 12
-BowAutoEquipBtn.AutoButtonColor = false
-BowAutoEquipBtn.Parent = MobPage
-
-do
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, 8)
-        c.Parent = BowAutoEquipBtn
-end
-
+-- This one small toggle was originally wired at creation time (outside the
+-- logic pcall), so it's replicated here exactly to keep behaviour identical.
 BowAutoEquipBtn.MouseButton1Click:Connect(function()
-        State.bowAutoEquip = not State.bowAutoEquip
-        if State.bowAutoEquip then
-                BowAutoEquipBtn.Text = "Auto-Equip: ON"
-                BowAutoEquipBtn.BackgroundColor3 = Color3.fromRGB(60, 140, 90)
-        else
-                BowAutoEquipBtn.Text = "Auto-Equip: OFF (manual hold only)"
-                BowAutoEquipBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-        end
+	State.bowAutoEquip = not State.bowAutoEquip
+	if State.bowAutoEquip then
+		BowAutoEquipBtn.Text = "Auto-Equip: ON"
+		BowAutoEquipBtn.BackgroundColor3 = Theme.Accent
+		BowAutoEquipBtn.TextColor3 = Theme.AccentText
+	else
+		BowAutoEquipBtn.Text = "Auto-Equip: OFF (manual hold only)"
+		BowAutoEquipBtn.BackgroundColor3 = Theme.Elevated
+		BowAutoEquipBtn.TextColor3 = Theme.Text
+	end
 end)
 
-local BowStatus = Instance.new("TextLabel")
-BowStatus.Size = UDim2.new(1, 0, 0, 16)
-BowStatus.Position = UDim2.new(0, 0, 0, 818)
-BowStatus.BackgroundTransparency = 1
-BowStatus.Text = "Idle"
-BowStatus.TextColor3 = Color3.fromRGB(140, 150, 180)
-BowStatus.TextXAlignment = Enum.TextXAlignment.Left
-BowStatus.Font = Enum.Font.Gotham
-BowStatus.TextSize = 10
-BowStatus.Parent = MobPage
-
+-- ================================================================
 -- // SETTINGS PAGE
-local SettingsPage = Instance.new("Frame")
-SettingsPage.Name = "SettingsPage"
-SettingsPage.Size = UDim2.new(1, 0, 1, 0)
-SettingsPage.BackgroundTransparency = 1
-SettingsPage.Visible = false
-SettingsPage.Parent = ContentArea
-Pages["Settings"] = SettingsPage
+-- ================================================================
+local SettingsPage = newPage("Settings")
 
-local SettingsPad = Instance.new("UIPadding")
-SettingsPad.PaddingLeft = UDim.new(0, 14)
-SettingsPad.PaddingTop = UDim.new(0, 14)
-SettingsPad.Parent = SettingsPage
+local moveCard = card(SettingsPage, 1, "Movement")
+local moveRow = new("Frame", { Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1, LayoutOrder = 1 }, moveCard)
+new("TextLabel", {
+	Size = UDim2.new(1, -60, 1, 0), BackgroundTransparency = 1, Text = "Toggle-square move mode",
+	Font = Theme.Font, TextSize = 12, TextColor3 = Theme.TextDim, TextXAlignment = Enum.TextXAlignment.Left,
+}, moveRow)
+local MoveToggleBtn = new("TextButton", {
+	Size = UDim2.new(0, 54, 0, 28), Position = UDim2.new(1, -54, 0, 2), BackgroundColor3 = Theme.Elevated,
+	BorderSizePixel = 0, Text = "OFF", Font = Theme.FontBold, TextSize = 12, TextColor3 = Theme.TextDim,
+	AutoButtonColor = false,
+}, moveRow)
+corner(MoveToggleBtn, 10); polish(MoveToggleBtn, { noScale = true })
 
-local SettingsTitle = Instance.new("TextLabel")
-SettingsTitle.Size = UDim2.new(1, -14, 0, 24)
-SettingsTitle.BackgroundTransparency = 1
-SettingsTitle.Text = "Settings"
-SettingsTitle.TextColor3 = Color3.fromRGB(180, 210, 255)
-SettingsTitle.TextXAlignment = Enum.TextXAlignment.Left
-SettingsTitle.Font = Enum.Font.GothamBold
-SettingsTitle.TextSize = 15
-SettingsTitle.Parent = SettingsPage
+local timingCard = card(SettingsPage, 2, "Timing")
+local SwingDownBtn, SwingUpBtn, SwingLabel = stepper(timingCard, 1, "Swing Interval: " .. string.format("%.2f", SWING_INTERVAL) .. "s", 0.1, 1.0)
+local RangeDownBtn, RangeUpBtn, RangeLabel = stepper(timingCard, 2, "Parry Range: " .. tostring(PARRY_RANGE) .. " studs", 5, 100)
 
-local MoveToggleLabel = Instance.new("TextLabel")
-MoveToggleLabel.Size = UDim2.new(0, 180, 0, 28)
-MoveToggleLabel.Position = UDim2.new(0, 0, 0, 34)
-MoveToggleLabel.BackgroundTransparency = 1
-MoveToggleLabel.Text = "Toggle Button Moveable"
-MoveToggleLabel.TextColor3 = Color3.fromRGB(160, 180, 220)
-MoveToggleLabel.TextXAlignment = Enum.TextXAlignment.Left
-MoveToggleLabel.Font = Enum.Font.Gotham
-MoveToggleLabel.TextSize = 13
-MoveToggleLabel.Parent = SettingsPage
-
-local MoveToggleBtn = Instance.new("TextButton")
-MoveToggleBtn.Size = UDim2.new(0, 46, 0, 24)
-MoveToggleBtn.Position = UDim2.new(0, 186, 0, 37)
-MoveToggleBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-MoveToggleBtn.BorderSizePixel = 0
-MoveToggleBtn.Text = "OFF"
-MoveToggleBtn.TextColor3 = Color3.fromRGB(180, 180, 200)
-MoveToggleBtn.Font = Enum.Font.GothamBold
-MoveToggleBtn.TextSize = 11
-MoveToggleBtn.AutoButtonColor = false
-MoveToggleBtn.Parent = SettingsPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = MoveToggleBtn
-end
-
-local SwingLabel = Instance.new("TextLabel")
-SwingLabel.Size = UDim2.new(0, 180, 0, 28)
-SwingLabel.Position = UDim2.new(0, 0, 0, 68)
-SwingLabel.BackgroundTransparency = 1
-SwingLabel.Text = "Swing Interval: " .. tostring(SWING_INTERVAL) .. "s"
-SwingLabel.TextColor3 = Color3.fromRGB(160, 180, 220)
-SwingLabel.TextXAlignment = Enum.TextXAlignment.Left
-SwingLabel.Font = Enum.Font.Gotham
-SwingLabel.TextSize = 13
-SwingLabel.Parent = SettingsPage
-
-local SwingDownBtn = Instance.new("TextButton")
-SwingDownBtn.Size = UDim2.new(0, 36, 0, 24)
-SwingDownBtn.Position = UDim2.new(0, 186, 0, 71)
-SwingDownBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-SwingDownBtn.BorderSizePixel = 0
-SwingDownBtn.Text = "-"
-SwingDownBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-SwingDownBtn.Font = Enum.Font.GothamBold
-SwingDownBtn.TextSize = 14
-SwingDownBtn.AutoButtonColor = false
-SwingDownBtn.Parent = SettingsPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = SwingDownBtn
-end
-
-local SwingUpBtn = Instance.new("TextButton")
-SwingUpBtn.Size = UDim2.new(0, 36, 0, 24)
-SwingUpBtn.Position = UDim2.new(0, 228, 0, 71)
-SwingUpBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-SwingUpBtn.BorderSizePixel = 0
-SwingUpBtn.Text = "+"
-SwingUpBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-SwingUpBtn.Font = Enum.Font.GothamBold
-SwingUpBtn.TextSize = 14
-SwingUpBtn.AutoButtonColor = false
-SwingUpBtn.Parent = SettingsPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = SwingUpBtn
-end
-
-local RangeLabel = Instance.new("TextLabel")
-RangeLabel.Size = UDim2.new(0, 180, 0, 28)
-RangeLabel.Position = UDim2.new(0, 0, 0, 102)
-RangeLabel.BackgroundTransparency = 1
-RangeLabel.Text = "Parry Range: " .. tostring(PARRY_RANGE) .. " studs"
-RangeLabel.TextColor3 = Color3.fromRGB(160, 180, 220)
-RangeLabel.TextXAlignment = Enum.TextXAlignment.Left
-RangeLabel.Font = Enum.Font.Gotham
-RangeLabel.TextSize = 13
-RangeLabel.Parent = SettingsPage
-
-local RangeDownBtn = Instance.new("TextButton")
-RangeDownBtn.Size = UDim2.new(0, 36, 0, 24)
-RangeDownBtn.Position = UDim2.new(0, 186, 0, 105)
-RangeDownBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-RangeDownBtn.BorderSizePixel = 0
-RangeDownBtn.Text = "-"
-RangeDownBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-RangeDownBtn.Font = Enum.Font.GothamBold
-RangeDownBtn.TextSize = 14
-RangeDownBtn.AutoButtonColor = false
-RangeDownBtn.Parent = SettingsPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = RangeDownBtn
-end
-
-local RangeUpBtn = Instance.new("TextButton")
-RangeUpBtn.Size = UDim2.new(0, 36, 0, 24)
-RangeUpBtn.Position = UDim2.new(0, 228, 0, 105)
-RangeUpBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-RangeUpBtn.BorderSizePixel = 0
-RangeUpBtn.Text = "+"
-RangeUpBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-RangeUpBtn.Font = Enum.Font.GothamBold
-RangeUpBtn.TextSize = 14
-RangeUpBtn.AutoButtonColor = false
-RangeUpBtn.Parent = SettingsPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = RangeUpBtn
-end
-
--- Kill Script button (destroys everything)
-local KillScriptBtn = Instance.new("TextButton")
-KillScriptBtn.Size = UDim2.new(1, 0, 0, 40)
-KillScriptBtn.Position = UDim2.new(0, 0, 0, 140)
-KillScriptBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
-KillScriptBtn.BorderSizePixel = 0
-KillScriptBtn.Text = "KILL SCRIPT (remove all)"
-KillScriptBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-KillScriptBtn.Font = Enum.Font.GothamBold
-KillScriptBtn.TextSize = 13
-KillScriptBtn.AutoButtonColor = false
-KillScriptBtn.Parent = SettingsPage
-
-do
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 8)
-        corner.Parent = KillScriptBtn
-end
-
-local KillScriptWarn = Instance.new("TextLabel")
-KillScriptWarn.Size = UDim2.new(1, 0, 0, 16)
-KillScriptWarn.Position = UDim2.new(0, 0, 0, 184)
-KillScriptWarn.BackgroundTransparency = 1
-KillScriptWarn.Text = "Stops ALL features and removes the entire UI"
-KillScriptWarn.TextColor3 = Color3.fromRGB(160, 100, 100)
-KillScriptWarn.TextXAlignment = Enum.TextXAlignment.Left
-KillScriptWarn.Font = Enum.Font.Gotham
-KillScriptWarn.TextSize = 10
-KillScriptWarn.Parent = SettingsPage
+local dangerCard = card(SettingsPage, 3, "Danger Zone", Theme.Danger)
+caption(dangerCard, 1, "Stops every feature and completely destroys the UI. This cannot be undone without re-running the script.")
+local KillScriptBtn = actionButton(dangerCard, 2, "Kill Script", "danger")
 
 -- ================================================================
 -- // JUNKPITS PAGE
 -- ================================================================
+local JunkpitsPage = newPage("Junkpits")
 
-local JunkpitsPage = Instance.new("ScrollingFrame")
-JunkpitsPage.Name = "JunkpitsPage"
-JunkpitsPage.Size = UDim2.new(1, 0, 1, 0)
-JunkpitsPage.BackgroundTransparency = 1
-JunkpitsPage.Visible = false
-JunkpitsPage.ScrollBarThickness = 4
-JunkpitsPage.ScrollBarImageColor3 = Color3.fromRGB(255, 180, 80)
-JunkpitsPage.CanvasSize = UDim2.new(0, 0, 0, 400)
-JunkpitsPage.AutomaticCanvasSize = Enum.AutomaticSize.Y
-JunkpitsPage.Parent = ContentArea
-Pages["Junkpits"] = JunkpitsPage
+local cronoCard = card(JunkpitsPage, 1, "Crono's Key Collect")
+local CronoKeyBtn = actionButton(cronoCard, 1, "Start Crono Key Collect", "primary")
+local CronoKeyStatus = statusLabel(cronoCard, 2, "Idle")
 
-do
-        local pad = Instance.new("UIPadding")
-        pad.PaddingLeft = UDim.new(0, 14)
-        pad.PaddingTop = UDim.new(0, 14)
-        pad.PaddingRight = UDim.new(0, 14)
-        pad.Parent = JunkpitsPage
-end
-
-local JunkpitsTitle = Instance.new("TextLabel")
-JunkpitsTitle.Size = UDim2.new(1, -14, 0, 24)
-JunkpitsTitle.BackgroundTransparency = 1
-JunkpitsTitle.Text = "Junkpits"
-JunkpitsTitle.TextColor3 = Color3.fromRGB(255, 200, 120)
-JunkpitsTitle.TextXAlignment = Enum.TextXAlignment.Left
-JunkpitsTitle.Font = Enum.Font.GothamBold
-JunkpitsTitle.TextSize = 15
-JunkpitsTitle.Parent = JunkpitsPage
-
--- ===== CRONO'S CRAZY CHALLENGE KEY COLLECT =====
-local CronoTitle = Instance.new("TextLabel")
-CronoTitle.Size = UDim2.new(1, 0, 0, 20)
-CronoTitle.Position = UDim2.new(0, 0, 0, 34)
-CronoTitle.BackgroundTransparency = 1
-CronoTitle.Text = "Crono's Crazy Challenge"
-CronoTitle.TextColor3 = Color3.fromRGB(255, 180, 80)
-CronoTitle.TextXAlignment = Enum.TextXAlignment.Left
-CronoTitle.Font = Enum.Font.GothamBold
-CronoTitle.TextSize = 13
-CronoTitle.Parent = JunkpitsPage
-
-local CronoKeyBtn = Instance.new("TextButton")
-CronoKeyBtn.Size = UDim2.new(1, 0, 0, 40)
-CronoKeyBtn.Position = UDim2.new(0, 0, 0, 58)
-CronoKeyBtn.BackgroundColor3 = Color3.fromRGB(180, 100, 40)
-CronoKeyBtn.BorderSizePixel = 0
-CronoKeyBtn.Text = "Auto Crono's Crazy Challenge Key Collect"
-CronoKeyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-CronoKeyBtn.Font = Enum.Font.GothamBold
-CronoKeyBtn.TextSize = 12
-CronoKeyBtn.AutoButtonColor = false
-CronoKeyBtn.Parent = JunkpitsPage
-
-do
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, 8)
-        c.Parent = CronoKeyBtn
-end
-
-local CronoKeyStatus = Instance.new("TextLabel")
-CronoKeyStatus.Size = UDim2.new(1, 0, 0, 30)
-CronoKeyStatus.Position = UDim2.new(0, 0, 0, 102)
-CronoKeyStatus.BackgroundTransparency = 1
-CronoKeyStatus.Text = "Status: Idle"
-CronoKeyStatus.TextColor3 = Color3.fromRGB(140, 150, 180)
-CronoKeyStatus.TextXAlignment = Enum.TextXAlignment.Left
-CronoKeyStatus.Font = Enum.Font.Gotham
-CronoKeyStatus.TextSize = 10
-CronoKeyStatus.TextWrapped = true
-CronoKeyStatus.Parent = JunkpitsPage
-
--- ===== DELETE ENEMIES / KILLBRICKS =====
-local DeleteTitle = Instance.new("TextLabel")
-DeleteTitle.Size = UDim2.new(1, 0, 0, 20)
-DeleteTitle.Position = UDim2.new(0, 0, 0, 140)
-DeleteTitle.BackgroundTransparency = 1
-DeleteTitle.Text = "Auto-Delete (Crono's Challenge)"
-DeleteTitle.TextColor3 = Color3.fromRGB(255, 120, 120)
-DeleteTitle.TextXAlignment = Enum.TextXAlignment.Left
-DeleteTitle.Font = Enum.Font.GothamBold
-DeleteTitle.TextSize = 13
-DeleteTitle.Parent = JunkpitsPage
-
-local DeleteBtn = Instance.new("TextButton")
-DeleteBtn.Size = UDim2.new(1, 0, 0, 40)
-DeleteBtn.Position = UDim2.new(0, 0, 0, 164)
-DeleteBtn.BackgroundColor3 = Color3.fromRGB(120, 40, 40)
-DeleteBtn.BorderSizePixel = 0
-DeleteBtn.Text = "Delete All enemy/Kill brick in Crono's Crazy Challenge"
-DeleteBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-DeleteBtn.Font = Enum.Font.GothamBold
-DeleteBtn.TextSize = 11
-DeleteBtn.AutoButtonColor = false
-DeleteBtn.Parent = JunkpitsPage
-
-do
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, 8)
-        c.Parent = DeleteBtn
-end
-
-local DeleteStatus = Instance.new("TextLabel")
-DeleteStatus.Size = UDim2.new(1, 0, 0, 30)
-DeleteStatus.Position = UDim2.new(0, 0, 0, 208)
-DeleteStatus.BackgroundTransparency = 1
-DeleteStatus.Text = "Status: Idle"
-DeleteStatus.TextColor3 = Color3.fromRGB(140, 150, 180)
-DeleteStatus.TextXAlignment = Enum.TextXAlignment.Left
-DeleteStatus.Font = Enum.Font.Gotham
-DeleteStatus.TextSize = 10
-DeleteStatus.TextWrapped = true
-DeleteStatus.Parent = JunkpitsPage
+local deleteCard = card(JunkpitsPage, 2, "Delete Enemies")
+local DeleteBtn = actionButton(deleteCard, 1, "Start Delete Enemies", "primary")
+local DeleteStatus = statusLabel(deleteCard, 2, "Idle")
 
 -- ================================================================
 -- // RIFTS PAGE
 -- ================================================================
+local RiftsPage = newPage("Rifts")
 
-local RiftsPage = Instance.new("ScrollingFrame")
-RiftsPage.Name = "RiftsPage"
-RiftsPage.Size = UDim2.new(1, 0, 1, 0)
-RiftsPage.BackgroundTransparency = 1
-RiftsPage.Visible = false
-RiftsPage.ScrollBarThickness = 4
-RiftsPage.ScrollBarImageColor3 = Color3.fromRGB(180, 100, 255)
-RiftsPage.CanvasSize = UDim2.new(0, 0, 0, 280)
-RiftsPage.AutomaticCanvasSize = Enum.AutomaticSize.Y
-RiftsPage.Parent = ContentArea
-Pages["Rifts"] = RiftsPage
+local riftsCard = card(RiftsPage, 1, "Auto Rifts")
+caption(riftsCard, 1, "Automatically detects and clears nearby rifts.")
+local RiftsRadiusDownBtn, RiftsRadiusUpBtn, RiftsRadiusLabel = stepper(riftsCard, 2, "Mob detect radius: " .. tostring(State.riftsRadius) .. " studs", 50, 5000)
+local AutoRiftsBtn = actionButton(riftsCard, 3, "Start Auto Rifts", "primary")
+local RiftsStatus = statusLabel(riftsCard, 4, "Idle")
 
-do
-        local pad = Instance.new("UIPadding")
-        pad.PaddingLeft = UDim.new(0, 14)
-        pad.PaddingTop = UDim.new(0, 14)
-        pad.PaddingRight = UDim.new(0, 14)
-        pad.Parent = RiftsPage
+local riftsModeCard = card(RiftsPage, 2, "Activation Mode")
+local RiftsMobileBtn, RiftsDesktopBtn = segmented(riftsModeCard, 1, { "Mobile", "Desktop" })
+
+-- ================================================================
+-- // SIDEBAR NAVIGATION
+-- ================================================================
+local sidebarEntries = {}
+
+local function sidebarButton(iconFn, label, order)
+	local btn = new("TextButton", {
+		Size = UDim2.new(1, 0, 0, 58), BackgroundColor3 = Theme.Accent, BackgroundTransparency = 1,
+		AutoButtonColor = false, BorderSizePixel = 0, Text = "", LayoutOrder = order,
+	}, Sidebar)
+	corner(btn, 12)
+	local bar = new("Frame", {
+		Size = UDim2.new(0, 3, 0, 0), Position = UDim2.new(0, 0, 0.5, 0), AnchorPoint = Vector2.new(0, 0.5),
+		BackgroundColor3 = Theme.Accent, BorderSizePixel = 0,
+	}, btn)
+	corner(bar, 2)
+	local iconHolder = new("Frame", {
+		Size = UDim2.new(0, 22, 0, 22), Position = UDim2.new(0.5, 0, 0.32, 0),
+		AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1,
+	}, btn)
+	local _, iconParts = iconFn(iconHolder, 22, Theme.TextDim)
+	local lbl = new("TextLabel", {
+		Size = UDim2.new(1, -6, 0, 14), Position = UDim2.new(0.5, 0, 0.76, 0), AnchorPoint = Vector2.new(0.5, 0.5),
+		BackgroundTransparency = 1, Text = label, Font = Theme.FontBold, TextSize = 10, TextColor3 = Theme.TextDim,
+	}, btn)
+	polish(btn, { noScale = true })
+	local entry = { btn = btn, bar = bar, iconParts = iconParts, lbl = lbl, name = label }
+	table.insert(sidebarEntries, entry)
+	return entry
 end
 
-local RiftsTitle = Instance.new("TextLabel")
-RiftsTitle.Size = UDim2.new(1, -14, 0, 24)
-RiftsTitle.BackgroundTransparency = 1
-RiftsTitle.Text = "Rifts"
-RiftsTitle.TextColor3 = Color3.fromRGB(200, 150, 255)
-RiftsTitle.TextXAlignment = Enum.TextXAlignment.Left
-RiftsTitle.Font = Enum.Font.GothamBold
-RiftsTitle.TextSize = 15
-RiftsTitle.Parent = RiftsPage
+local playerEntry = sidebarButton(Icons.player, "Player", 1)
+local autoEntry = sidebarButton(Icons.diamond, "Auto", 2)
+local mobEntry = sidebarButton(Icons.cross, "Mob", 3)
+local settingsEntry = sidebarButton(Icons.gear, "Settings", 4)
+local junkpitsEntry = sidebarButton(Icons.trash, "Junkpits", 5)
+local riftsEntry = sidebarButton(Icons.portal, "Rifts", 6)
 
-local RiftsInfo = Instance.new("TextLabel")
-RiftsInfo.Size = UDim2.new(1, 0, 0, 30)
-RiftsInfo.Position = UDim2.new(0, 0, 0, 28)
-RiftsInfo.BackgroundTransparency = 1
-RiftsInfo.Text = "Auto TP to RiftSpawn1-7, hold G, kill mobs in radius, wait for 'Rift cleared' message, then next rift"
-RiftsInfo.TextColor3 = Color3.fromRGB(120, 100, 160)
-RiftsInfo.TextXAlignment = Enum.TextXAlignment.Left
-RiftsInfo.Font = Enum.Font.Gotham
-RiftsInfo.TextSize = 10
-RiftsInfo.TextWrapped = true
-RiftsInfo.Parent = RiftsPage
+local PlayerBtn, AutoBtn, MobBtn, SettingsBtn, JunkpitsBtn, RiftsBtn =
+	playerEntry.btn, autoEntry.btn, mobEntry.btn, settingsEntry.btn, junkpitsEntry.btn, riftsEntry.btn
 
--- Radius adjuster
-local RiftsRadiusLabel = Instance.new("TextLabel")
-RiftsRadiusLabel.Size = UDim2.new(0, 180, 0, 20)
-RiftsRadiusLabel.Position = UDim2.new(0, 0, 0, 64)
-RiftsRadiusLabel.BackgroundTransparency = 1
-RiftsRadiusLabel.Text = "Mob detect radius: 1000 studs"
-RiftsRadiusLabel.TextColor3 = Color3.fromRGB(160, 180, 220)
-RiftsRadiusLabel.TextXAlignment = Enum.TextXAlignment.Left
-RiftsRadiusLabel.Font = Enum.Font.Gotham
-RiftsRadiusLabel.TextSize = 12
-RiftsRadiusLabel.Parent = RiftsPage
-
-local RiftsRadiusDownBtn = Instance.new("TextButton")
-RiftsRadiusDownBtn.Size = UDim2.new(0, 30, 0, 20)
-RiftsRadiusDownBtn.Position = UDim2.new(0, 186, 0, 64)
-RiftsRadiusDownBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-RiftsRadiusDownBtn.BorderSizePixel = 0
-RiftsRadiusDownBtn.Text = "-"
-RiftsRadiusDownBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-RiftsRadiusDownBtn.Font = Enum.Font.GothamBold
-RiftsRadiusDownBtn.TextSize = 13
-RiftsRadiusDownBtn.AutoButtonColor = false
-RiftsRadiusDownBtn.Parent = RiftsPage
-
-do
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, 6)
-        c.Parent = RiftsRadiusDownBtn
+local function setActiveSidebarBtn(activeEntry)
+	for _, e in ipairs(sidebarEntries) do
+		local isActive = (e == activeEntry)
+		tw(e.btn, 0.18, { BackgroundTransparency = isActive and 0.88 or 1 })
+		tw(e.bar, 0.18, { Size = UDim2.new(0, 3, 0, isActive and 26 or 0) })
+		tw(e.lbl, 0.15, { TextColor3 = isActive and Theme.Text or Theme.TextDim })
+		for _, p in ipairs(e.iconParts) do
+			tw(p, 0.15, { BackgroundColor3 = isActive and Theme.Accent or Theme.TextDim })
+		end
+	end
 end
 
-local RiftsRadiusUpBtn = Instance.new("TextButton")
-RiftsRadiusUpBtn.Size = UDim2.new(0, 30, 0, 20)
-RiftsRadiusUpBtn.Position = UDim2.new(0, 220, 0, 64)
-RiftsRadiusUpBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-RiftsRadiusUpBtn.BorderSizePixel = 0
-RiftsRadiusUpBtn.Text = "+"
-RiftsRadiusUpBtn.TextColor3 = Color3.fromRGB(200, 200, 220)
-RiftsRadiusUpBtn.Font = Enum.Font.GothamBold
-RiftsRadiusUpBtn.TextSize = 13
-RiftsRadiusUpBtn.AutoButtonColor = false
-RiftsRadiusUpBtn.Parent = RiftsPage
-
-do
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, 6)
-        c.Parent = RiftsRadiusUpBtn
+local currentPageName = "Player"
+local function showPage(pageName)
+	if pageName == currentPageName or not Pages[pageName] then return end
+	currentPageName = pageName
+	tw(ContentArea, 0.10, { GroupTransparency = 1 }, Enum.EasingStyle.Quad)
+	task.delay(0.10, function()
+		for name, frame in pairs(Pages) do
+			frame.Visible = (name == pageName)
+		end
+		tw(ContentArea, 0.16, { GroupTransparency = 0 }, Enum.EasingStyle.Quad)
+	end)
 end
 
--- Auto Rifts toggle button
-local AutoRiftsBtn = Instance.new("TextButton")
-AutoRiftsBtn.Size = UDim2.new(1, 0, 0, 40)
-AutoRiftsBtn.Position = UDim2.new(0, 0, 0, 94)
-AutoRiftsBtn.BackgroundColor3 = Color3.fromRGB(100, 60, 160)
-AutoRiftsBtn.BorderSizePixel = 0
-AutoRiftsBtn.Text = ">  Start Auto Rifts"
-AutoRiftsBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-AutoRiftsBtn.Font = Enum.Font.GothamBold
-AutoRiftsBtn.TextSize = 14
-AutoRiftsBtn.AutoButtonColor = false
-AutoRiftsBtn.Parent = RiftsPage
+setActiveSidebarBtn(playerEntry)
 
-do
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, 8)
-        c.Parent = AutoRiftsBtn
-end
-
-local RiftsStatus = Instance.new("TextLabel")
-RiftsStatus.Size = UDim2.new(1, 0, 0, 40)
-RiftsStatus.Position = UDim2.new(0, 0, 0, 140)
-RiftsStatus.BackgroundTransparency = 1
-RiftsStatus.Text = "Status: Idle"
-RiftsStatus.TextColor3 = Color3.fromRGB(140, 150, 180)
-RiftsStatus.TextXAlignment = Enum.TextXAlignment.Left
-RiftsStatus.Font = Enum.Font.Gotham
-RiftsStatus.TextSize = 10
-RiftsStatus.TextWrapped = true
-RiftsStatus.Parent = RiftsPage
-
--- Note about attack position
-local RiftsNote = Instance.new("TextLabel")
-RiftsNote.Size = UDim2.new(1, 0, 0, 20)
-RiftsNote.Position = UDim2.new(0, 0, 0, 184)
-RiftsNote.BackgroundTransparency = 1
-RiftsNote.Text = "Attack position uses Mob page settings (Below/Above/Behind/Front/Custom)"
-RiftsNote.TextColor3 = Color3.fromRGB(100, 90, 130)
-RiftsNote.TextXAlignment = Enum.TextXAlignment.Left
-RiftsNote.Font = Enum.Font.Gotham
-RiftsNote.TextSize = 9
-RiftsNote.Parent = RiftsPage
-
--- Activation mode selection (Mobile = tap screen 2x, Desktop = hold G)
-local RiftsActivationLabel = Instance.new("TextLabel")
-RiftsActivationLabel.Size = UDim2.new(1, 0, 0, 16)
-RiftsActivationLabel.Position = UDim2.new(0, 0, 0, 208)
-RiftsActivationLabel.BackgroundTransparency = 1
-RiftsActivationLabel.Text = "Rift activation method:"
-RiftsActivationLabel.TextColor3 = Color3.fromRGB(160, 180, 220)
-RiftsActivationLabel.TextXAlignment = Enum.TextXAlignment.Left
-RiftsActivationLabel.Font = Enum.Font.Gotham
-RiftsActivationLabel.TextSize = 10
-RiftsActivationLabel.Parent = RiftsPage
-
-local RiftsMobileBtn = Instance.new("TextButton")
-RiftsMobileBtn.Size = UDim2.new(0.48, 0, 0, 28)
-RiftsMobileBtn.Position = UDim2.new(0, 0, 0, 228)
-RiftsMobileBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 80)
-RiftsMobileBtn.BorderSizePixel = 0
-RiftsMobileBtn.Text = "Mobile (tap 2x)"
-RiftsMobileBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-RiftsMobileBtn.Font = Enum.Font.GothamBold
-RiftsMobileBtn.TextSize = 11
-RiftsMobileBtn.AutoButtonColor = false
-RiftsMobileBtn.Parent = RiftsPage
-
-do
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, 6)
-        c.Parent = RiftsMobileBtn
-end
-
-local RiftsDesktopBtn = Instance.new("TextButton")
-RiftsDesktopBtn.Size = UDim2.new(0.48, 0, 0, 28)
-RiftsDesktopBtn.Position = UDim2.new(0.52, 0, 0, 228)
-RiftsDesktopBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-RiftsDesktopBtn.BorderSizePixel = 0
-RiftsDesktopBtn.Text = "Desktop (hold G)"
-RiftsDesktopBtn.TextColor3 = Color3.fromRGB(220, 220, 240)
-RiftsDesktopBtn.Font = Enum.Font.GothamBold
-RiftsDesktopBtn.TextSize = 11
-RiftsDesktopBtn.AutoButtonColor = false
-RiftsDesktopBtn.Parent = RiftsPage
-
-do
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0, 6)
-        c.Parent = RiftsDesktopBtn
-end
-
--- // SIDEBAR BUTTONS
-local PlayerBtn = createSidebarButton("Player", "P")
-local AutoBtn = createSidebarButton("Auto", ">")
-local MobBtn = createSidebarButton("Mob", "!")
-local SettingsBtn = createSidebarButton("Settings", "*")
-local JunkpitsBtn = createSidebarButton("Junkpits", "J")
-local RiftsBtn = createSidebarButton("Rifts", "R")
-local allSideBtns = {PlayerBtn, AutoBtn, MobBtn, SettingsBtn, JunkpitsBtn, RiftsBtn}
-setActiveSidebarBtn(PlayerBtn, allSideBtns)
-
--- // SIDEBAR NAVIGATION (outside pcall â€” basic page switching always works)
 PlayerBtn.MouseButton1Click:Connect(function()
-        setActiveSidebarBtn(PlayerBtn, allSideBtns)
-        showPage("Player")
+	setActiveSidebarBtn(playerEntry)
+	showPage("Player")
 end)
 
 AutoBtn.MouseButton1Click:Connect(function()
-        setActiveSidebarBtn(AutoBtn, allSideBtns)
-        showPage("Auto")
-        pcall(function() if refreshOreList then refreshOreList() end end)
-end)
-
-SettingsBtn.MouseButton1Click:Connect(function()
-        setActiveSidebarBtn(SettingsBtn, allSideBtns)
-        showPage("Settings")
+	setActiveSidebarBtn(autoEntry)
+	showPage("Auto")
+	pcall(function() if refreshOreList then refreshOreList() end end)
 end)
 
 MobBtn.MouseButton1Click:Connect(function()
-        setActiveSidebarBtn(MobBtn, allSideBtns)
-        showPage("Mob")
-        pcall(function() if refreshMobList then refreshMobList(true) end end)
+	setActiveSidebarBtn(mobEntry)
+	showPage("Mob")
+	pcall(function() if refreshMobList then refreshMobList(true) end end)
+end)
+
+SettingsBtn.MouseButton1Click:Connect(function()
+	setActiveSidebarBtn(settingsEntry)
+	showPage("Settings")
 end)
 
 JunkpitsBtn.MouseButton1Click:Connect(function()
-        setActiveSidebarBtn(JunkpitsBtn, allSideBtns)
-        showPage("Junkpits")
+	setActiveSidebarBtn(junkpitsEntry)
+	showPage("Junkpits")
 end)
 
 RiftsBtn.MouseButton1Click:Connect(function()
-        setActiveSidebarBtn(RiftsBtn, allSideBtns)
-        showPage("Rifts")
+	setActiveSidebarBtn(riftsEntry)
+	showPage("Rifts")
 end)
 
+-- ================================================================
+-- // DRAGGING (single shared listener â€” no per-frame connection leaks)
+-- ================================================================
+local _dragTargets = {}
+UserInputService.InputChanged:Connect(function(input)
+	for _, d in ipairs(_dragTargets) do
+		if input == d.dragInput and d.dragging then
+			local delta = input.Position - d.dragStart
+			d.targetFrame.Position = UDim2.new(
+				d.startPos.X.Scale, d.startPos.X.Offset + delta.X,
+				d.startPos.Y.Scale, d.startPos.Y.Offset + delta.Y
+			)
+		end
+	end
+end)
+
+local function makeDraggable(dragHandle, targetFrame)
+	local d = { dragging = false, dragStart = nil, startPos = nil, dragInput = nil, targetFrame = targetFrame }
+	table.insert(_dragTargets, d)
+	dragHandle.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			d.dragging = true
+			d.dragStart = input.Position
+			d.startPos = targetFrame.Position
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					d.dragging = false
+				end
+			end)
+		end
+	end)
+	dragHandle.InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+			d.dragInput = input
+		end
+	end)
+end
+
+makeDraggable(TitleBar, MainFrame)
+
+-- ================================================================
+-- // OPEN / CLOSE (smooth fade + pop via CanvasGroup + UIScale)
+-- ================================================================
+local menuOpen = false
+
+local function setMenuOpen(open)
+	menuOpen = open
+	if open then
+		MainFrame.Visible = true
+		Shadow.Visible = true
+		tw(MainFrame, 0.24, { GroupTransparency = 0 }, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+		tw(MainFrameScale, 0.24, { Scale = 1 }, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+		tw(Shadow, 0.24, { BackgroundTransparency = 0.45 })
+		pcall(function() if refreshOreList then refreshOreList() end end)
+		pcall(function() if refreshMobList then refreshMobList() end end)
+	else
+		tw(MainFrame, 0.16, { GroupTransparency = 1 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+		tw(MainFrameScale, 0.16, { Scale = 0.92 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+		tw(Shadow, 0.16, { BackgroundTransparency = 1 })
+		task.delay(0.16, function()
+			if not menuOpen then
+				MainFrame.Visible = false
+				Shadow.Visible = false
+			end
+		end)
+	end
+end
+
+ToggleButton.MouseButton1Click:Connect(function()
+	setMenuOpen(not menuOpen)
+end)
+
+CloseBtn.MouseButton1Click:Connect(function()
+	setMenuOpen(false)
+end)
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+	if input.KeyCode == Enum.KeyCode.M then
+		setMenuOpen(not menuOpen)
+	end
+end)
+
+print("[Pilgrammed] Aurora UI ready!")
+
+-- Initial entrance animation
+setMenuOpen(true)
+
 print("[Pilgrammed] UI elements created!")
-
--- ================================================================
--- // SECTION 3: LOGIC CODE (IN PCALL â€” errors don't kill UI)
--- ================================================================
-
 local ok, err = pcall(function()
 
 local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
