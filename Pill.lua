@@ -152,22 +152,6 @@ local refreshMobList
 -- // SECTION 1: EARLY UI (NO PCALL â€” always works even if rest crashes)
 -- ================================================================
 
-local TS = game:GetService("TweenService")
-
-local Theme = {
-        BG = Color3.fromRGB(28, 28, 30),
-        Panel = Color3.fromRGB(38, 38, 41),
-        Card = Color3.fromRGB(44, 44, 48),
-        Accent = Color3.fromRGB(76, 217, 100),
-        Text = Color3.fromRGB(255, 255, 255),
-        SubText = Color3.fromRGB(150, 150, 158),
-        Stroke = Color3.fromRGB(58, 58, 62),
-}
-
-local function tween(obj, props, t, style)
-        return TS:Create(obj, TweenInfo.new(t or 0.18, style or Enum.EasingStyle.Quad, Enum.EasingDirection.Out), props)
-end
-
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "OreMinerGui"
 ScreenGui.ResetOnSpawn = false
@@ -178,76 +162,67 @@ local ToggleButton = Instance.new("TextButton")
 ToggleButton.Name = "ToggleButton"
 ToggleButton.Size = UDim2.new(0, 50, 0, 50)
 ToggleButton.Position = UDim2.new(1, -70, 0, 20)
-ToggleButton.BackgroundColor3 = Theme.Panel
+ToggleButton.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
 ToggleButton.BorderSizePixel = 0
-ToggleButton.Text = "M"
-ToggleButton.TextColor3 = Theme.Accent
+ToggleButton.Text = "[M]"
+ToggleButton.TextColor3 = Color3.fromRGB(200, 220, 255)
 ToggleButton.TextScaled = true
 ToggleButton.Font = Enum.Font.GothamBold
 ToggleButton.AutoButtonColor = false
 ToggleButton.ZIndex = 100
 ToggleButton.Parent = ScreenGui
-Instance.new("UICorner", ToggleButton).CornerRadius = UDim.new(1, 0)
+
+do
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 8)
+        corner.Parent = ToggleButton
+end
 
 local ToggleStroke = Instance.new("UIStroke")
-ToggleStroke.Color = Theme.Stroke
-ToggleStroke.Thickness = 1
+ToggleStroke.Color = Color3.fromRGB(100, 180, 255)
+ToggleStroke.Thickness = 1.5
 ToggleStroke.Parent = ToggleButton
-
-ToggleButton.MouseEnter:Connect(function() tween(ToggleButton, {BackgroundColor3 = Theme.Card}, 0.12):Play() end)
-ToggleButton.MouseLeave:Connect(function() tween(ToggleButton, {BackgroundColor3 = Theme.Panel}, 0.12):Play() end)
 
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainFrame"
-MainFrame.Size = UDim2.new(0, 460, 0, 520)
-MainFrame.Position = UDim2.new(0.5, -230, 0.5, -260)
-MainFrame.BackgroundColor3 = Theme.BG
+MainFrame.Size = UDim2.new(0, 420, 0, 480)
+MainFrame.Position = UDim2.new(0.5, -210, 0.5, -240)
+MainFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 26)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.Visible = false
-MainFrame.ClipsDescendants = true
 MainFrame.ZIndex = 50
 MainFrame.Parent = ScreenGui
-Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 16)
+
+do
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 12)
+        corner.Parent = MainFrame
+end
 
 local MainStroke = Instance.new("UIStroke")
-MainStroke.Color = Theme.Stroke
-MainStroke.Thickness = 1
+MainStroke.Color = Color3.fromRGB(80, 140, 255)
+MainStroke.Thickness = 1.5
 MainStroke.Parent = MainFrame
-
-local SizeConstraint = Instance.new("UISizeConstraint") -- keeps usable on PC/mobile/console
-SizeConstraint.MinSize = Vector2.new(300, 340)
-SizeConstraint.MaxSize = Vector2.new(560, 640)
-SizeConstraint.Parent = MainFrame
-
-local _uiOpen = false
-local function setUIVisible(vis)
-        if vis == _uiOpen then return end
-        _uiOpen = vis
-        if vis then
-                MainFrame.Visible = true
-                MainFrame.Size = UDim2.new(0, 460, 0, 480)
-                tween(MainFrame, {Size = UDim2.new(0, 460, 0, 520)}, 0.22, Enum.EasingStyle.Back):Play()
-                pcall(function() if refreshOreList then refreshOreList() end end)
-                pcall(function() if refreshMobList then refreshMobList() end end)
-        else
-                local t = tween(MainFrame, {Size = UDim2.new(0, 460, 0, 480)}, 0.15)
-                t:Play()
-                t.Completed:Wait()
-                MainFrame.Visible = false
-        end
-end
 
 -- Mobile: Toggle via button click
 ToggleButton.MouseButton1Click:Connect(function()
-        setUIVisible(not MainFrame.Visible)
+        MainFrame.Visible = not MainFrame.Visible
+        if MainFrame.Visible then
+                pcall(function() if refreshOreList then refreshOreList() end end)
+                pcall(function() if refreshMobList then refreshMobList() end end)
+        end
 end)
 
 -- Desktop: Toggle via M key
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
         if gameProcessed then return end
         if input.KeyCode == Enum.KeyCode.M then
-                setUIVisible(not MainFrame.Visible)
+                MainFrame.Visible = not MainFrame.Visible
+                if MainFrame.Visible then
+                        pcall(function() if refreshOreList then refreshOreList() end end)
+                        pcall(function() if refreshMobList then refreshMobList() end end)
+                end
         end
 end)
 
@@ -260,103 +235,88 @@ print("[Pilgrammed] Toggle UI ready!")
 -- Title bar
 local TitleBar = Instance.new("Frame")
 TitleBar.Name = "TitleBar"
-TitleBar.Size = UDim2.new(1, 0, 0, 44)
-TitleBar.BackgroundColor3 = Theme.Panel
+TitleBar.Size = UDim2.new(1, 0, 0, 36)
+TitleBar.BackgroundColor3 = Color3.fromRGB(25, 25, 38)
 TitleBar.BorderSizePixel = 0
 TitleBar.ZIndex = 2
 TitleBar.Parent = MainFrame
-Instance.new("UICorner", TitleBar).CornerRadius = UDim.new(0, 16)
+
+do
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 12)
+        corner.Parent = TitleBar
+end
 
 local TitleBarFix = Instance.new("Frame")
-TitleBarFix.Size = UDim2.new(1, 0, 0, 16)
-TitleBarFix.Position = UDim2.new(0, 0, 1, -16)
-TitleBarFix.BackgroundColor3 = Theme.Panel
+TitleBarFix.Size = UDim2.new(1, 0, 0, 12)
+TitleBarFix.Position = UDim2.new(0, 0, 1, -12)
+TitleBarFix.BackgroundColor3 = Color3.fromRGB(25, 25, 38)
 TitleBarFix.BorderSizePixel = 0
 TitleBarFix.ZIndex = 2
 TitleBarFix.Parent = TitleBar
 
-local TitleBarBottomLine = Instance.new("Frame")
-TitleBarBottomLine.Size = UDim2.new(1, 0, 0, 1)
-TitleBarBottomLine.Position = UDim2.new(0, 0, 1, 0)
-TitleBarBottomLine.BackgroundColor3 = Theme.Stroke
-TitleBarBottomLine.BorderSizePixel = 0
-TitleBarBottomLine.ZIndex = 3
-TitleBarBottomLine.Parent = TitleBar
-
-local TitlePad = Instance.new("UIPadding")
-TitlePad.PaddingLeft = UDim.new(0, 16)
-TitlePad.Parent = TitleBar
-
 local TitleLabel = Instance.new("TextLabel")
 TitleLabel.Size = UDim2.new(1, -60, 1, 0)
+TitleLabel.Position = UDim2.new(0, 12, 0, 0)
 TitleLabel.BackgroundTransparency = 1
-TitleLabel.Text = "Pilgrammed Miner"
-TitleLabel.TextColor3 = Theme.Text
+TitleLabel.Text = "Pilgrammed Miner V2"
+TitleLabel.TextColor3 = Color3.fromRGB(180, 210, 255)
 TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
 TitleLabel.Font = Enum.Font.GothamBold
-TitleLabel.TextSize = 16
+TitleLabel.TextSize = 15
 TitleLabel.ZIndex = 3
 TitleLabel.Parent = TitleBar
 
 local CloseBtn = Instance.new("TextButton")
-CloseBtn.Size = UDim2.new(0, 30, 0, 30)
-CloseBtn.Position = UDim2.new(1, -40, 0.5, -15)
-CloseBtn.BackgroundColor3 = Theme.Card
+CloseBtn.Size = UDim2.new(0, 28, 0, 28)
+CloseBtn.Position = UDim2.new(1, -34, 0.5, -14)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
 CloseBtn.Text = "X"
-CloseBtn.TextColor3 = Theme.SubText
+CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 CloseBtn.Font = Enum.Font.GothamBold
 CloseBtn.TextSize = 13
 CloseBtn.BorderSizePixel = 0
-CloseBtn.AutoButtonColor = false
 CloseBtn.ZIndex = 4
 CloseBtn.Parent = TitleBar
-Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(1, 0)
 
-CloseBtn.MouseEnter:Connect(function() tween(CloseBtn, {BackgroundColor3 = Color3.fromRGB(200, 60, 60)}, 0.12):Play() end)
-CloseBtn.MouseLeave:Connect(function() tween(CloseBtn, {BackgroundColor3 = Theme.Card}, 0.12):Play() end)
-CloseBtn.MouseButton1Click:Connect(function() setUIVisible(false) end)
+do
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 6)
+        corner.Parent = CloseBtn
+end
+
+-- Close button handler (always works)
+CloseBtn.MouseButton1Click:Connect(function()
+        MainFrame.Visible = false
+end)
 
 -- LEFT SIDEBAR
 local Sidebar = Instance.new("Frame")
 Sidebar.Name = "Sidebar"
-Sidebar.Size = UDim2.new(0, 96, 1, -44)
-Sidebar.Position = UDim2.new(0, 0, 0, 44)
-Sidebar.BackgroundColor3 = Theme.Panel
+Sidebar.Size = UDim2.new(0, 90, 1, -36)
+Sidebar.Position = UDim2.new(0, 0, 0, 36)
+Sidebar.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
 Sidebar.BorderSizePixel = 0
 Sidebar.Parent = MainFrame
 
-local SidebarLine = Instance.new("Frame")
-SidebarLine.Size = UDim2.new(0, 1, 1, 0)
-SidebarLine.Position = UDim2.new(1, -1, 0, 0)
-SidebarLine.BackgroundColor3 = Theme.Stroke
-SidebarLine.BorderSizePixel = 0
-SidebarLine.Parent = Sidebar
-
 local SidebarLayout = Instance.new("UIListLayout")
-SidebarLayout.Padding = UDim.new(0, 8)
+SidebarLayout.Padding = UDim.new(0, 6)
 SidebarLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 SidebarLayout.VerticalAlignment = Enum.VerticalAlignment.Top
 SidebarLayout.Parent = Sidebar
 
 local SidebarPadding = Instance.new("UIPadding")
-SidebarPadding.PaddingTop = UDim.new(0, 12)
+SidebarPadding.PaddingTop = UDim.new(0, 10)
 SidebarPadding.Parent = Sidebar
 
 -- CONTENT AREA
 local ContentArea = Instance.new("Frame")
 ContentArea.Name = "ContentArea"
-ContentArea.Size = UDim2.new(1, -96, 1, -44)
-ContentArea.Position = UDim2.new(0, 96, 0, 44)
+ContentArea.Size = UDim2.new(1, -90, 1, -36)
+ContentArea.Position = UDim2.new(0, 90, 0, 36)
 ContentArea.BackgroundTransparency = 1
 ContentArea.ClipsDescendants = true
 ContentArea.Parent = MainFrame
-
-local ContentPad = Instance.new("UIPadding")
-ContentPad.PaddingLeft = UDim.new(0, 12)
-ContentPad.PaddingRight = UDim.new(0, 12)
-ContentPad.PaddingTop = UDim.new(0, 12)
-ContentPad.PaddingBottom = UDim.new(0, 12)
-ContentPad.Parent = ContentArea
 
 -- PAGE SYSTEM
 local Pages = {}
@@ -364,44 +324,33 @@ local Pages = {}
 local function createSidebarButton(name, icon)
         local btn = Instance.new("TextButton")
         btn.Name = name .. "Btn"
-        btn.Size = UDim2.new(0, 80, 0, 54)
-        btn.BackgroundColor3 = Theme.Panel
+        btn.Size = UDim2.new(0, 74, 0, 50)
+        btn.BackgroundColor3 = Color3.fromRGB(30, 30, 44)
         btn.BorderSizePixel = 0
         btn.Text = icon .. "\n" .. name
-        btn.TextColor3 = Theme.SubText
+        btn.TextColor3 = Color3.fromRGB(160, 180, 220)
         btn.Font = Enum.Font.GothamBold
         btn.TextSize = 10
         btn.AutoButtonColor = false
         btn.Parent = Sidebar
-        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
-
-        btn.MouseEnter:Connect(function()
-                if btn.BackgroundColor3 ~= Theme.Accent then tween(btn, {BackgroundColor3 = Theme.Card}, 0.12):Play() end
-        end)
-        btn.MouseLeave:Connect(function()
-                if btn.BackgroundColor3 ~= Theme.Accent then tween(btn, {BackgroundColor3 = Theme.Panel}, 0.12):Play() end
-        end)
+        local c = Instance.new("UICorner")
+        c.CornerRadius = UDim.new(0, 8)
+        c.Parent = btn
         return btn
 end
 
 local function setActiveSidebarBtn(activeBtn, allBtns)
         for _, b in ipairs(allBtns) do
-                tween(b, {BackgroundColor3 = Theme.Panel}, 0.15):Play()
-                tween(b, {TextColor3 = Theme.SubText}, 0.15):Play()
+                b.BackgroundColor3 = Color3.fromRGB(30, 30, 44)
+                b.TextColor3 = Color3.fromRGB(160, 180, 220)
         end
-        tween(activeBtn, {BackgroundColor3 = Theme.Accent}, 0.15):Play()
-        tween(activeBtn, {TextColor3 = Color3.fromRGB(20, 20, 20)}, 0.15):Play()
+        activeBtn.BackgroundColor3 = Color3.fromRGB(50, 90, 180)
+        activeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 end
 
 local function showPage(pageName)
         for name, frame in pairs(Pages) do
-                if name == pageName then
-                        frame.Visible = true
-                        frame.Position = UDim2.new(0.02, 0, 0, 0)
-                        tween(frame, {Position = UDim2.new(0, 0, 0, 0)}, 0.16):Play()
-                else
-                        frame.Visible = false
-                end
+                frame.Visible = (name == pageName)
         end
 end
 
@@ -447,105 +396,8 @@ end
 
 makeDraggable(TitleBar, MainFrame, nil)
 
--- REUSABLE: iOS-style toggle switch
-local function CreateToggle(parent, labelText, initial, onChanged)
-        local row = Instance.new("Frame")
-        row.Size = UDim2.new(1, 0, 0, 36)
-        row.BackgroundColor3 = Theme.Card
-        row.BorderSizePixel = 0
-        row.Parent = parent
-        Instance.new("UICorner", row).CornerRadius = UDim.new(0, 8)
-
-        local pad = Instance.new("UIPadding")
-        pad.PaddingLeft = UDim.new(0, 10)
-        pad.PaddingRight = UDim.new(0, 10)
-        pad.Parent = row
-
-        local label = Instance.new("TextLabel")
-        label.Size = UDim2.new(1, -54, 1, 0)
-        label.BackgroundTransparency = 1
-        label.Text = labelText
-        label.TextColor3 = Theme.Text
-        label.Font = Enum.Font.Gotham
-        label.TextSize = 13
-        label.TextXAlignment = Enum.TextXAlignment.Left
-        label.Parent = row
-
-        local track = Instance.new("TextButton")
-        track.Size = UDim2.new(0, 44, 0, 24)
-        track.Position = UDim2.new(1, -44, 0.5, -12)
-        track.BackgroundColor3 = initial and Theme.Accent or Color3.fromRGB(70, 70, 74)
-        track.Text = ""
-        track.AutoButtonColor = false
-        track.BorderSizePixel = 0
-        track.Parent = row
-        Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
-
-        local knob = Instance.new("Frame")
-        knob.Size = UDim2.new(0, 20, 0, 20)
-        knob.Position = initial and UDim2.new(1, -22, 0.5, -10) or UDim2.new(0, 2, 0.5, -10)
-        knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-        knob.BorderSizePixel = 0
-        knob.Parent = track
-        Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
-
-        local state = initial
-        local function set(v)
-                state = v
-                tween(track, {BackgroundColor3 = v and Theme.Accent or Color3.fromRGB(70, 70, 74)}, 0.15):Play()
-                tween(knob, {Position = v and UDim2.new(1, -22, 0.5, -10) or UDim2.new(0, 2, 0.5, -10)}, 0.15):Play()
-        end
-        track.MouseButton1Click:Connect(function()
-                set(not state)
-                if onChanged then onChanged(state) end
-        end)
-        return {frame = row, set = set, get = function() return state end}
-end
-
--- REUSABLE: category card container with header
-local function CreateCard(parent, titleText)
-        local card = Instance.new("Frame")
-        card.BackgroundColor3 = Theme.Panel
-        card.BorderSizePixel = 0
-        card.AutomaticSize = Enum.AutomaticSize.Y
-        card.Size = UDim2.new(1, 0, 0, 0)
-        card.Parent = parent
-        Instance.new("UICorner", card).CornerRadius = UDim.new(0, 10)
-        local stroke = Instance.new("UIStroke")
-        stroke.Color = Theme.Stroke
-        stroke.Thickness = 1
-        stroke.Parent = card
-
-        local pad = Instance.new("UIPadding")
-        pad.PaddingLeft = UDim.new(0, 12)
-        pad.PaddingRight = UDim.new(0, 12)
-        pad.PaddingTop = UDim.new(0, 10)
-        pad.PaddingBottom = UDim.new(0, 12)
-        pad.Parent = card
-
-        local layout = Instance.new("UIListLayout")
-        layout.Padding = UDim.new(0, 8)
-        layout.SortOrder = Enum.SortOrder.LayoutOrder
-        layout.Parent = card
-
-        if titleText then
-                local header = Instance.new("TextLabel")
-                header.Size = UDim2.new(1, 0, 0, 18)
-                header.BackgroundTransparency = 1
-                header.Text = titleText
-                header.TextColor3 = Theme.Accent
-                header.Font = Enum.Font.GothamBold
-                header.TextSize = 12
-                header.TextXAlignment = Enum.TextXAlignment.Left
-                header.LayoutOrder = 0
-                header.Parent = card
-        end
-        return card
-end
-
 -- Show UI on load
 MainFrame.Visible = true
-_uiOpen = true
 
 -- // PLAYER PAGE
 local PlayerPage = Instance.new("ScrollingFrame")
