@@ -126,6 +126,9 @@ local State = {
         bowName = "Prism Bow",
         bowThread = nil,
         bowAutoEquip = false,   -- if false, only shoots when bow already equipped/held
+        mineAutoEquip = false,  -- if false, only mines when pickaxe already equipped
+        mobAutoEquip = false,   -- if false, only farms when weapon already equipped
+        campAutoEquip = false,  -- if false, only farms when weapon already equipped
         -- Auto Fishing
         autoFish = false,
         fishDiscovery = false,
@@ -713,6 +716,7 @@ local AllOresBtn = new("TextButton", {
 }, mineRow)
 corner(AllOresBtn, 12); polish(AllOresBtn)
 local StatusLabel = statusLabel(mineCard, 2, "Status: Idle | Fly: OFF")
+local MineAutoEquipBtn = actionButton(mineCard, 3, "Auto-Equip Pickaxe: OFF")
 
 local goldCard = card(AutoGoldPage, 1, "Auto Deposit Gold")
 local AutoDepositBtn = actionButton(goldCard, 1, "Auto Deposit: OFF")
@@ -748,6 +752,7 @@ local MobAllBtn = new("TextButton", {
         AutoButtonColor = false, LayoutOrder = 2,
 }, mobFarmRow)
 corner(MobAllBtn, 12); polish(MobAllBtn)
+local MobAutoEquipBtn = actionButton(mobFarmCard, 3, "Auto-Equip Weapon: OFF")
 
 local campCard = card(AutoFarmPage, 6, "Camp Farm")
 local WeaponNameBox, EquipWeaponBtn = inputWithButton(campCard, 1, "Weapon name", "", "Equip")
@@ -768,6 +773,7 @@ corner(ClearPointBtn, 10); polish(ClearPointBtn, { noScale = true })
 local CampRadiusDownBtn, CampRadiusUpBtn, CampRadiusLabel = stepper(campCard, 3, "Radius: " .. tostring(State.campRadius) .. " studs", 5, 200)
 local CampStatusLabel = statusLabel(campCard, 4, "Camp: Idle")
 local CampFarmBtn = actionButton(campCard, 5, "Start Camp Farm", "primary")
+local CampAutoEquipBtn = actionButton(campCard, 6, "Auto-Equip Weapon: OFF")
 
 local atkPosCard = card(AutoFarmPage, 7, "Attack Position")
 caption(atkPosCard, 1, "Applies to both Mob Farm and Camp Farm.")
@@ -801,6 +807,48 @@ BowAutoEquipBtn.MouseButton1Click:Connect(function()
         end
 end)
 
+-- Mining auto-equip toggle
+MineAutoEquipBtn.MouseButton1Click:Connect(function()
+        State.mineAutoEquip = not State.mineAutoEquip
+        if State.mineAutoEquip then
+                MineAutoEquipBtn.Text = "Auto-Equip Pickaxe: ON"
+                MineAutoEquipBtn.BackgroundColor3 = Theme.Accent
+                MineAutoEquipBtn.TextColor3 = Theme.AccentText
+        else
+                MineAutoEquipBtn.Text = "Auto-Equip Pickaxe: OFF"
+                MineAutoEquipBtn.BackgroundColor3 = Theme.Elevated
+                MineAutoEquipBtn.TextColor3 = Theme.Text
+        end
+end)
+
+-- Mob Farm auto-equip toggle
+MobAutoEquipBtn.MouseButton1Click:Connect(function()
+        State.mobAutoEquip = not State.mobAutoEquip
+        if State.mobAutoEquip then
+                MobAutoEquipBtn.Text = "Auto-Equip Weapon: ON"
+                MobAutoEquipBtn.BackgroundColor3 = Theme.Accent
+                MobAutoEquipBtn.TextColor3 = Theme.AccentText
+        else
+                MobAutoEquipBtn.Text = "Auto-Equip Weapon: OFF"
+                MobAutoEquipBtn.BackgroundColor3 = Theme.Elevated
+                MobAutoEquipBtn.TextColor3 = Theme.Text
+        end
+end)
+
+-- Camp Farm auto-equip toggle
+CampAutoEquipBtn.MouseButton1Click:Connect(function()
+        State.campAutoEquip = not State.campAutoEquip
+        if State.campAutoEquip then
+                CampAutoEquipBtn.Text = "Auto-Equip Weapon: ON"
+                CampAutoEquipBtn.BackgroundColor3 = Theme.Accent
+                CampAutoEquipBtn.TextColor3 = Theme.AccentText
+        else
+                CampAutoEquipBtn.Text = "Auto-Equip Weapon: OFF"
+                CampAutoEquipBtn.BackgroundColor3 = Theme.Elevated
+                CampAutoEquipBtn.TextColor3 = Theme.Text
+        end
+end)
+
 -- ================================================================
 -- // SETTINGS PAGE
 -- ================================================================
@@ -809,27 +857,14 @@ local SettingsKillPage = newPage("Kill Script")
 local UI = {}  -- shared table for UI refs (avoids 200-local limit)
 
 do
-local moveCard = card(SettingsUIPage, 1, "Movement")
-local moveRow = new("Frame", { Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1, LayoutOrder = 1 }, moveCard)
-new("TextLabel", {
-        Size = UDim2.new(1, -60, 1, 0), BackgroundTransparency = 1, Text = "Toggle-square move mode",
-        Font = Theme.Font, TextSize = 12, TextColor3 = Theme.TextDim, TextXAlignment = Enum.TextXAlignment.Left,
-}, moveRow)
-UI.MoveToggleBtn = new("TextButton", {
-        Size = UDim2.new(0, 54, 0, 28), Position = UDim2.new(1, -54, 0, 2), BackgroundColor3 = Theme.Elevated,
-        BorderSizePixel = 0, Text = "OFF", Font = Theme.FontBold, TextSize = 12, TextColor3 = Theme.TextDim,
-        AutoButtonColor = false,
-}, moveRow)
-corner(UI.MoveToggleBtn, 10); polish(UI.MoveToggleBtn, { noScale = true })
-
-local timingCard = card(SettingsUIPage, 2, "Timing")
+local timingCard = card(SettingsUIPage, 1, "Timing")
 UI.SwingDownBtn, UI.SwingUpBtn, UI.SwingLabel = stepper(timingCard, 1, "Swing Interval: " .. string.format("%.2f", SWING_INTERVAL) .. "s", 0.1, 1.0)
 UI.RangeDownBtn, UI.RangeUpBtn, UI.RangeLabel = stepper(timingCard, 2, "Parry Range: " .. tostring(PARRY_RANGE) .. " studs", 5, 100)
 
-        local sizeCard = card(SettingsUIPage, 3, "UI Scale")
+        local sizeCard = card(SettingsUIPage, 2, "UI Scale")
         UI.SizeDownBtn, UI.SizeUpBtn, UI.SizeLabel = stepper(sizeCard, 1, "UI Scale: " .. string.format("%.2f", 1.0) .. "x", 0.5, 2.0)
 
-        local dragCard = card(SettingsUIPage, 4, "Page Position")
+        local dragCard = card(SettingsUIPage, 3, "Page Position")
         caption(dragCard, 1, "Enable dragging to move the page UI anywhere on screen. Disable to lock it in place.")
         local dragRow = new("Frame", { Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1, LayoutOrder = 2 }, dragCard)
         new("TextLabel", {
@@ -1720,6 +1755,7 @@ local function swingPickaxe()
         if not char then return end
         local pickaxe = char:FindFirstChild(State.equippedPickaxe and State.equippedPickaxe.Name or "")
         if not pickaxe then
+                if not State.mineAutoEquip then return end  -- don't auto-equip if toggle is OFF
                 pickaxe = findPickaxe()
                 if pickaxe then
                         equipPickaxe(pickaxe)
@@ -2160,20 +2196,22 @@ end
 local function startAutoMobFarm()
         if #State.currentMobQueue == 0 then return end
 
-        -- Find and equip weapon
-        local weapon
-        if State.lastEquippedWeaponName then
-                weapon = findWeaponByName(State.lastEquippedWeaponName)
-        end
-        if not weapon then
-                weapon = findWeapon()
-        end
-        if weapon then
-                equipWeapon(weapon)
-                task.wait(0.5)
-        else
-                warn("[AutoMob] No weapon found!")
-                return
+        -- Find and equip weapon (only if auto-equip is ON)
+        if State.mobAutoEquip then
+                local weapon
+                if State.lastEquippedWeaponName then
+                        weapon = findWeaponByName(State.lastEquippedWeaponName)
+                end
+                if not weapon then
+                        weapon = findWeapon()
+                end
+                if weapon then
+                        equipWeapon(weapon)
+                        task.wait(0.5)
+                else
+                        warn("[AutoMob] No weapon found!")
+                        return
+                end
         end
 
         State.autoMobFarming = true
@@ -2412,23 +2450,25 @@ local function startCampFarm()
                 return
         end
 
-        -- Equip weapon (by typed name, or fallback to any weapon)
-        local weapon
-        if State.campWeaponName and State.campWeaponName ~= "" then
-                weapon = findWeaponByName(State.campWeaponName)
-        end
-        if not weapon then
-                weapon = findWeapon()
-        end
-        if weapon then
-                equipWeapon(weapon)
-                task.wait(0.5)
-        else
-                if CampStatusLabel then
-                        CampStatusLabel.Text = "Camp: No weapon found!"
-                        CampStatusLabel.TextColor3 = Color3.fromRGB(255, 120, 120)
+        -- Equip weapon (by typed name, or fallback to any weapon) — only if auto-equip is ON
+        if State.campAutoEquip then
+                local weapon
+                if State.campWeaponName and State.campWeaponName ~= "" then
+                        weapon = findWeaponByName(State.campWeaponName)
                 end
-                return
+                if not weapon then
+                        weapon = findWeapon()
+                end
+                if weapon then
+                        equipWeapon(weapon)
+                        task.wait(0.5)
+                else
+                        if CampStatusLabel then
+                CampStatusLabel.Text = "Camp: No weapon found!"
+                                CampStatusLabel.TextColor3 = Color3.fromRGB(255, 120, 120)
+                        end
+                        return
+                end
         end
 
         State.autoCampFarming = true
@@ -2835,13 +2875,15 @@ end
 
 local function startAutoFarm()
         if #State.currentOreQueue == 0 then return end
-        local pickaxe = findPickaxe()
-        if pickaxe then
-                equipPickaxe(pickaxe)
-                task.wait(0.6)
-        else
-                warn("[AutoMiner] No pickaxe found.")
-                return
+        if State.mineAutoEquip then
+                local pickaxe = findPickaxe()
+                if pickaxe then
+                        equipPickaxe(pickaxe)
+                        task.wait(0.6)
+                else
+                        warn("[AutoMiner] No pickaxe found.")
+                        return
+                end
         end
         State.autoFarming = true
         State.currentOreQueueIndex = 1
@@ -4466,10 +4508,12 @@ LocalPlayer.CharacterAdded:Connect(function(newChar)
 
         if State.autoFarming then
                 task.wait(1)
-                local pickaxe = findPickaxe()
-                if pickaxe then
-                        equipPickaxe(pickaxe)
-                        task.wait(0.5)
+                if State.mineAutoEquip then
+                        local pickaxe = findPickaxe()
+                        if pickaxe then
+                                equipPickaxe(pickaxe)
+                                task.wait(0.5)
+                        end
                 end
                 startNoclip()
                 if State.flyConnection then State.flyConnection:Disconnect() end
