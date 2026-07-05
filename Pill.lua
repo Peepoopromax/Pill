@@ -129,6 +129,11 @@ local State = {
         mineAutoEquip = false,  -- if false, only mines when pickaxe already equipped
         mobAutoEquip = false,   -- if false, only farms when weapon already equipped
         campAutoEquip = false,  -- if false, only farms when weapon already equipped
+        -- Gold Farm Chicken
+        autoChickenFarm = false,
+        chickenDrinkMagmatic = false,
+        chickenRange = 30,
+        chickenThread = nil,
         -- Auto Fishing
         autoFish = false,
         fishDiscovery = false,
@@ -723,6 +728,29 @@ local AutoDepositBtn = actionButton(goldCard, 1, "Auto Deposit: OFF")
 local GoldThreshDownBtn, GoldThreshUpBtn, GoldThresholdLabel = stepper(goldCard, 2, "Cooldown: " .. string.format("%.1f", AUTO_DEPOSIT_COOLDOWN) .. "s", 0.5, 30)
 local GoldStatus = statusLabel(goldCard, 3, "Status: Idle")
 
+-- Gold Farm Chicken Method
+ChickenFarmBtn = nil
+ChickenDrinkBtn = nil
+ChickenStatus = nil
+ChickenWeaponBox = nil
+do
+local chickenCard = card(AutoGoldPage, 2, "Gold Farm Chicken Method")
+local ChickenRangeDownBtn, ChickenRangeUpBtn, ChickenRangeLabel = stepper(chickenCard, 1, "Detect range: 30 studs", 5, 100)
+ChickenWeaponBox = textInput(chickenCard, 2, "Weapon name (bow or melee)", "")
+ChickenFarmBtn = actionButton(chickenCard, 3, "Start Chicken Farm", "primary")
+ChickenDrinkBtn = actionButton(chickenCard, 4, "Auto Drink Magmatic: OFF")
+ChickenStatus = statusLabel(chickenCard, 5, "Status: Idle")
+
+ChickenRangeDownBtn.MouseButton1Click:Connect(function()
+        State.chickenRange = math.max(5, State.chickenRange - 5)
+        ChickenRangeLabel.Text = "Detect range: " .. tostring(State.chickenRange) .. " studs"
+end)
+ChickenRangeUpBtn.MouseButton1Click:Connect(function()
+        State.chickenRange = math.min(100, State.chickenRange + 5)
+        ChickenRangeLabel.Text = "Detect range: " .. tostring(State.chickenRange) .. " studs"
+end)
+end
+
 -- ================================================================
 -- // MOB PAGE (mob farm, camp farm, attack position, auto bow)
 -- ================================================================
@@ -733,7 +761,7 @@ local MobSearchBox, MobSelAllBtn, MobClrAllBtn, MobScroll, MobSelectedLabel = se
 
 local atkTypeCard = card(AutoFarmPage, 4, "Attack Type & Range")
 local LightBtn, HeavyBtn, TechBtn = segmented(atkTypeCard, 1, { "Light", "Heavy", "Technique" })
-local MobDistDownBtn, MobDistUpBtn, MobDistLabel = stepper(atkTypeCard, 2, "Below mob: " .. tostring(math.abs(MOB_FLY_OFFSET.Y)) .. " studs", 1, 20)
+local MobDistDownBtn, MobDistUpBtn, MobDistLabel = stepper(atkTypeCard, 2, "Below mob: " .. tostring(math.abs(MOB_FLY_OFFSET.Y)) .. " studs", 1, 50)
 local MobAtkDownBtn, MobAtkUpBtn, MobAtkLabel = stepper(atkTypeCard, 3, "Attack Speed: " .. string.format("%.2f", MOB_ATTACK_INTERVAL) .. "s", 0.1, 2.0)
 
 local mobFarmCard = card(AutoFarmPage, 5, "Mob Farm")
@@ -779,8 +807,8 @@ local atkPosCard = card(AutoFarmPage, 7, "Attack Position")
 caption(atkPosCard, 1, "Applies to both Mob Farm and Camp Farm.")
 local AtkPosBelowBtn, AtkPosAboveBtn, AtkPosBehindBtn, AtkPosFrontBtn, AtkPosCustomBtn =
         segmented(atkPosCard, 2, { "Below", "Above", "Behind", "Front", "Custom" }, { height = 40, textSize = 11 })
-local BelowAboveDistDownBtn, BelowAboveDistUpBtn, BelowAboveDistLabel = stepper(atkPosCard, 3, "Below/Above dist: " .. tostring(BELOW_DISTANCE) .. " studs", 1, 20)
-local BehindDistDownBtn, BehindDistUpBtn, BehindDistLabel = stepper(atkPosCard, 4, "Behind/Front dist: " .. tostring(BEHIND_DISTANCE) .. " studs", 1, 20)
+local BelowAboveDistDownBtn, BelowAboveDistUpBtn, BelowAboveDistLabel = stepper(atkPosCard, 3, "Below/Above dist: " .. tostring(BELOW_DISTANCE) .. " studs", 1, 50)
+local BehindDistDownBtn, BehindDistUpBtn, BehindDistLabel = stepper(atkPosCard, 4, "Behind/Front dist: " .. tostring(BEHIND_DISTANCE) .. " studs", 1, 50)
 local CustomOffsetBox, CustomOffsetApplyBtn = inputWithButton(atkPosCard, 5, "Custom offset: x,y,z", "", "Apply")
 
 -- ================================================================
@@ -1894,13 +1922,13 @@ local function findWeaponByName(name)
         local backpack = LocalPlayer:FindFirstChild("Backpack")
         if char then
                 local tool = char:FindFirstChild(name)
-                if tool and tool:IsA("Tool") and tool:FindFirstChild("Slash") then
+                if tool and tool:IsA("Tool") and (tool:FindFirstChild("Slash") or tool:FindFirstChild("Shoot")) then
                         return tool
                 end
         end
         if backpack then
                 local tool = backpack:FindFirstChild(name)
-                if tool and tool:IsA("Tool") and tool:FindFirstChild("Slash") then
+                if tool and tool:IsA("Tool") and (tool:FindFirstChild("Slash") or tool:FindFirstChild("Shoot")) then
                         return tool
                 end
         end
@@ -3038,7 +3066,7 @@ end)
 
 MobDistUpBtn.MouseButton1Click:Connect(function()
         local y = math.abs(MOB_FLY_OFFSET.Y) + 1
-        y = math.min(20, y)
+        y = math.min(50, y)
         MOB_FLY_OFFSET = Vector3.new(0, -y, 0)
         MobDistLabel.Text = "Below mob: " .. tostring(y) .. " studs"
 end)
@@ -3436,8 +3464,8 @@ BelowAboveDistDownBtn.MouseButton1Click:Connect(function()
 end)
 
 BelowAboveDistUpBtn.MouseButton1Click:Connect(function()
-        BELOW_DISTANCE = math.min(20, BELOW_DISTANCE + 1)
-        ABOVE_DISTANCE = math.min(20, ABOVE_DISTANCE + 1)
+        BELOW_DISTANCE = math.min(50, BELOW_DISTANCE + 1)
+        ABOVE_DISTANCE = math.min(50, ABOVE_DISTANCE + 1)
         BelowAboveDistLabel.Text = "Below/Above dist: " .. tostring(BELOW_DISTANCE) .. " studs"
 end)
 
@@ -3448,7 +3476,7 @@ BehindDistDownBtn.MouseButton1Click:Connect(function()
 end)
 
 BehindDistUpBtn.MouseButton1Click:Connect(function()
-        BEHIND_DISTANCE = math.min(20, BEHIND_DISTANCE + 1)
+        BEHIND_DISTANCE = math.min(50, BEHIND_DISTANCE + 1)
         BehindDistLabel.Text = "Behind/Front dist: " .. tostring(BEHIND_DISTANCE) .. " studs"
 end)
 
@@ -5669,6 +5697,311 @@ do
                 end
         end)
 end
+
+-- ================================================================
+-- // GOLD FARM CHICKEN METHOD
+-- ================================================================
+
+local function findKillerChicken(maxDist)
+        local char = LocalPlayer.Character
+        if not char then return nil end
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if not hrp then return nil end
+        local myPos = hrp.Position
+        local nearest = nil
+        local nearestDist = maxDist or 30
+        local mobsFolder = workspace:FindFirstChild("Mobs")
+        if not mobsFolder then return nil end
+        forEachMob(mobsFolder, function(mob, hum)
+                if hum.Health > 0 and mob.Name == "Killer Chicken" then
+                        local mobHrp = mob:FindFirstChild("HumanoidRootPart")
+                        if mobHrp then
+                                local d = (mobHrp.Position - myPos).Magnitude
+                                if d <= nearestDist then
+                                        nearestDist = d
+                                        nearest = mob
+                                end
+                        end
+                end
+        end)
+        return nearest
+end
+
+local function equipEggOfPain()
+        local backpack = LocalPlayer:FindFirstChild("Backpack")
+        local char = LocalPlayer.Character
+        if not backpack or not char then return false end
+        local egg = backpack:FindFirstChild("Egg of Pain")
+        if not egg then
+                -- check if already equipped
+                egg = char:FindFirstChild("Egg of Pain")
+                if egg then return true end
+                return false
+        end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then
+                hum:EquipTool(egg)
+                task.wait(0.3)
+                return char:FindFirstChild("Egg of Pain") ~= nil
+        end
+        return false
+end
+
+local function drinkMagmaticSlime()
+        local char = LocalPlayer.Character
+        if not char then return false end
+        local backpack = LocalPlayer:FindFirstChild("Backpack")
+        -- Check if already equipped or in backpack
+        local slime = char:FindFirstChild("Gold Magmatic Slime")
+        if not slime and backpack then
+                slime = backpack:FindFirstChild("Gold Magmatic Slime")
+                if slime then
+                        local hum = char:FindFirstChildOfClass("Humanoid")
+                        if hum then
+                                hum:EquipTool(slime)
+                                task.wait(0.3)
+                                slime = char:FindFirstChild("Gold Magmatic Slime")
+                        end
+                end
+        end
+        if not slime then return false end
+        local remote = slime:FindFirstChild("RemoteEvent")
+        if not remote then return false end
+        pcall(function()
+                remote:FireServer()
+        end)
+        return true
+end
+
+local function getEquippedWeaponType()
+        local char = LocalPlayer.Character
+        if not char then return nil, nil end
+        for _, tool in ipairs(char:GetChildren()) do
+                if tool:IsA("Tool") then
+                        if tool:FindFirstChild("Shoot") then return "bow", tool
+                        elseif tool:FindFirstChild("Slash") then return "melee", tool end
+                end
+        end
+        return nil, nil
+end
+
+local function startChickenFarm()
+        if State.autoChickenFarm then return end
+        State.autoChickenFarm = true
+        ChickenFarmBtn.Text = "[ ]  Stop Chicken Farm"
+        ChickenFarmBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 80)
+        ChickenStatus.Text = "Starting..."
+        ChickenStatus.TextColor3 = Color3.fromRGB(100, 220, 255)
+        print("[ChickenFarm] === STARTED ===")
+
+        State.chickenThread = task.spawn(function()
+                local lastAttack = 0
+
+                while State.autoChickenFarm do
+                        -- STEP 1: TP to Nest
+                        local nest = workspace:FindFirstChild("Map")
+                        if nest then nest = nest:FindFirstChild("Landfill") end
+                        if nest then nest = nest:FindFirstChild("Nest") end
+                        if not nest then
+                                ChickenStatus.Text = "Nest not found! Waiting..."
+                                ChickenStatus.TextColor3 = Color3.fromRGB(255, 120, 120)
+                                task.wait(2)
+                        else
+                                local nestPos = nil
+                                if nest:IsA("BasePart") then nestPos = nest.Position
+                                elseif nest:IsA("Model") then
+                                        nestPos = (nest.PrimaryPart or nest:FindFirstChildWhichIsA("BasePart"))
+                                        nestPos = nestPos and nestPos.Position
+                                elseif nest:IsA("Folder") then
+                                        for _, d in ipairs(nest:GetDescendants()) do
+                                                if d:IsA("BasePart") then nestPos = d.Position break end
+                                        end
+                                end
+                                if nestPos then
+                                        local char = LocalPlayer.Character
+                                        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                                        if hrp then
+                                                hrp.CFrame = CFrame.new(nestPos + Vector3.new(0, 5, 0))
+                                        end
+                                end
+
+                                -- STEP 2: Toggle Egg of Pain equip/unequip every 1s until chicken spawns
+                                ChickenStatus.Text = "Toggling Egg of Pain... Waiting for Killer Chicken..."
+                                ChickenStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
+
+                                local chicken = nil
+                                while State.autoChickenFarm and not chicken do
+                                        chicken = findKillerChicken(State.chickenRange)
+                                        if not chicken then
+                                                local char = LocalPlayer.Character
+                                                local backpack = LocalPlayer:FindFirstChild("Backpack")
+                                                if char then
+                                                        local hum = char:FindFirstChildOfClass("Humanoid")
+                                                        local eggInChar = char:FindFirstChild("Egg of Pain")
+                                                        local eggInBackpack = backpack and backpack:FindFirstChild("Egg of Pain")
+                                                        if hum then
+                                                                if eggInChar then
+                                                                        pcall(function() hum:UnequipTools() end)
+                                                                elseif eggInBackpack then
+                                                                        pcall(function() hum:EquipTool(eggInBackpack) end)
+                                                                end
+                                                        end
+                                                end
+                                                task.wait(1)
+                                        end
+                                end
+                                if not State.autoChickenFarm then break end
+
+                                -- STEP 3: Kill the Killer Chicken
+                                ChickenStatus.Text = "Killer Chicken found! Killing..."
+                                ChickenStatus.TextColor3 = Color3.fromRGB(255, 120, 120)
+                                print("[ChickenFarm] Killer Chicken found - engaging")
+
+                                local weaponName = ChickenWeaponBox and ChickenWeaponBox.Text or ""
+                                local hasDrunkThisChicken = false  -- only drink once per chicken
+
+                                -- Equip weapon at start
+                                if weaponName and weaponName ~= "" then
+                                        local w = findWeaponByName(weaponName)
+                                        if w then
+                                                local char = LocalPlayer.Character
+                                                local h = char and char:FindFirstChildOfClass("Humanoid")
+                                                if h then pcall(function() h:EquipTool(w) end) end
+                                                task.wait(0.3)
+                                        end
+                                end
+
+                                while State.autoChickenFarm and chicken and chicken.Parent do
+                                        local hum = chicken:FindFirstChildOfClass("Humanoid")
+                                        if not hum or hum.Health <= 0 then break end
+
+                                        -- Check if chicken HP < 500 → drink magmatic (only once per chicken)
+                                        if State.chickenDrinkMagmatic and hum.Health < 500 and not hasDrunkThisChicken then
+                                                hasDrunkThisChicken = true  -- prevent drinking again
+
+                                                ChickenStatus.Text = "Chicken HP < 500! Drinking potion..."
+                                                ChickenStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
+                                                print("[ChickenFarm] Killer Chicken HP < 500 - drinking")
+
+                                                -- Step 1: Unequip everything first
+                                                local char = LocalPlayer.Character
+                                                local h = char and char:FindFirstChildOfClass("Humanoid")
+                                                if h then pcall(function() h:UnequipTools() end) end
+                                                task.wait(0.2)
+
+                                                -- Step 2: Equip potion and drink
+                                                drinkMagmaticSlime()
+
+                                                -- Step 3: Wait 1.5s (only potion equipped, nothing else)
+                                                local drinkStart = tick()
+                                                while State.autoChickenFarm and (tick() - drinkStart) < 1.5 do
+                                                        task.wait(0.1)
+                                                end
+
+                                                -- Step 4: Unequip potion
+                                                char = LocalPlayer.Character
+                                                h = char and char:FindFirstChildOfClass("Humanoid")
+                                                if h then pcall(function() h:UnequipTools() end) end
+                                                task.wait(0.2)
+
+                                                -- Step 5: Re-equip weapon
+                                                ChickenStatus.Text = "Re-equipping weapon..."
+                                                ChickenStatus.TextColor3 = Color3.fromRGB(255, 120, 120)
+                                                if weaponName and weaponName ~= "" then
+                                                        local w = findWeaponByName(weaponName)
+                                                        if w then
+                                                                h = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+                                                                if h then pcall(function() h:EquipTool(w) end) end
+                                                                task.wait(0.3)
+                                                        end
+                                                end
+                                                -- Continue attacking (loop back)
+                                        else
+                                                -- Attack the chicken
+                                                if weaponName and weaponName ~= "" then
+                                                        -- Equip weapon if not already equipped
+                                                        local char = LocalPlayer.Character
+                                                        local weapon = char and char:FindFirstChild(weaponName)
+                                                        if not weapon then
+                                                                local w = findWeaponByName(weaponName)
+                                                                if w then
+                                                                        local h = char and char:FindFirstChildOfClass("Humanoid")
+                                                                        if h then pcall(function() h:EquipTool(w) end) end
+                                                                        task.wait(0.1)
+                                                                        weapon = char and char:FindFirstChild(weaponName)
+                                                                end
+                                                        end
+                                                        -- Attack with weapon
+                                                        if weapon then
+                                                                tpToMob(chicken)
+                                                                local mobHrp = chicken:FindFirstChild("HumanoidRootPart")
+                                                                local now = tick()
+                                                                if weapon:FindFirstChild("Shoot") and mobHrp then
+                                                                        -- Bow attack
+                                                                        if now - lastAttack >= 0.1 then
+                                                                                lastAttack = now
+                                                                                pcall(function() weapon.Shoot:InvokeServer(mobHrp.Position, "Arrow", true, 1) end)
+                                                                        end
+                                                                elseif weapon:FindFirstChild("Slash") then
+                                                                        -- Melee attack
+                                                                        if now - lastAttack >= MOB_ATTACK_INTERVAL then
+                                                                                lastAttack = now
+                                                                                local atkType = getNextAttackType() or 1
+                                                                                pcall(function() weapon.Slash:FireServer(atkType) end)
+                                                                        end
+                                                                end
+                                                                task.wait(0.05)
+                                                        else
+                                                                task.wait(0.2)  -- weapon not found, wait before retry
+                                                        end
+                                                else
+                                                        -- No weapon name typed → do nothing (don't auto-equip random weapons)
+                                                        task.wait(0.5)
+                                                end
+                                        end
+                                end
+
+                                -- Chicken dead
+                                if State.autoChickenFarm then
+                                        ChickenStatus.Text = "Killer Chicken killed! Going back to Nest..."
+                                        ChickenStatus.TextColor3 = Color3.fromRGB(100, 255, 150)
+                                        print("[ChickenFarm] Killer Chicken killed - back to step 1")
+                                end
+                        end
+                        task.wait(0.5)
+                end
+        end)
+end
+
+local function stopChickenFarm()
+        State.autoChickenFarm = false
+        ChickenFarmBtn.Text = "Start Chicken Farm"
+        ChickenFarmBtn.BackgroundColor3 = Color3.fromRGB(40, 120, 100)
+        ChickenStatus.Text = "Stopped"
+        ChickenStatus.TextColor3 = Color3.fromRGB(140, 150, 180)
+        print("[ChickenFarm] === STOPPED ===")
+end
+
+ChickenFarmBtn.MouseButton1Click:Connect(function()
+        if State.autoChickenFarm then
+                stopChickenFarm()
+        else
+                startChickenFarm()
+        end
+end)
+
+ChickenDrinkBtn.MouseButton1Click:Connect(function()
+        State.chickenDrinkMagmatic = not State.chickenDrinkMagmatic
+        if State.chickenDrinkMagmatic then
+                ChickenDrinkBtn.Text = "Auto Drink Magmatic: ON"
+                ChickenDrinkBtn.BackgroundColor3 = Theme.Accent
+                ChickenDrinkBtn.TextColor3 = Theme.AccentText
+        else
+                ChickenDrinkBtn.Text = "Auto Drink Magmatic: OFF"
+                ChickenDrinkBtn.BackgroundColor3 = Theme.Elevated
+                ChickenDrinkBtn.TextColor3 = Theme.Text
+        end
+end)
 
 end) -- end pcall
 
