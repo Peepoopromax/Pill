@@ -724,6 +724,7 @@ local AllOresBtn = new("TextButton", {
 }, mineRow)
 corner(AllOresBtn, 12); polish(AllOresBtn)
 local StatusLabel = statusLabel(mineCard, 2, "Status: Idle | Fly: OFF")
+caption(mineCard, 3, "Cycles ores when depleted | Fly + Face ore")
 
 local goldCard = card(AutoPage, 3, "Auto Deposit Gold")
 local AutoDepositBtn = actionButton(goldCard, 1, "Auto Deposit: OFF")
@@ -862,6 +863,7 @@ local RiftsStatus = statusLabel(riftsCard, 4, "Idle")
 
 local riftsModeCard = card(RiftsPage, 2, "Activation Mode")
 local RiftsMobileBtn, RiftsDesktopBtn = segmented(riftsModeCard, 1, { "Mobile", "Desktop" })
+caption(riftsModeCard, 2, "Attack position uses Mob page settings (Below/Above/Behind/Front/Custom)")
 
 -- ================================================================
 -- // SIDEBAR NAVIGATION
