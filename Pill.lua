@@ -126,9 +126,13 @@ local State = {
         bowName = "Prism Bow",
         bowThread = nil,
         bowAutoEquip = false,   -- if false, only shoots when bow already equipped/held
-        mineAutoEquip = false,  -- if false, only mines when pickaxe already equipped
-        mobAutoEquip = false,   -- if false, only farms when weapon already equipped
-        campAutoEquip = false,  -- if false, only farms when weapon already equipped
+        -- Auto-equip toggles
+        mineAutoEquip = false,
+        mobAutoEquip = false,
+        campAutoEquip = false,
+        -- Page draggable
+        pageDraggable = false,
+        uiScale = 1.0,
         -- Gold Farm Chicken
         autoChickenFarm = false,
         chickenDrinkMagmatic = false,
@@ -170,19 +174,20 @@ local TweenService = game:GetService("TweenService")
 -- // DESIGN TOKENS
 -- ================================================================
 local Theme = {
-        Backdrop    = Color3.fromRGB(14, 14, 16),   -- behind the panel (drag shadow)
-        Base        = Color3.fromRGB(28, 28, 30),   -- #1C1C1E — main panel
-        Sidebar     = Color3.fromRGB(20, 20, 22),
-        Card        = Color3.fromRGB(36, 36, 39),
-        Elevated    = Color3.fromRGB(48, 48, 52),   -- resting buttons / inputs
-        Surface     = Color3.fromRGB(23, 23, 26),   -- scroll frame wells
-        Track       = Color3.fromRGB(56, 56, 60),
-        Accent      = Color3.fromRGB(76, 217, 100), -- #4CD964 — mint green
-        AccentText  = Color3.fromRGB(8, 26, 14),
-        Text        = Color3.fromRGB(255, 255, 255),
-        TextDim     = Color3.fromRGB(160, 160, 168),
-        TextFaint   = Color3.fromRGB(102, 102, 110),
-        Danger      = Color3.fromRGB(255, 69, 58),
+        Backdrop    = Color3.fromRGB(8, 6, 14),      -- behind the panel (drag shadow)
+        Base        = Color3.fromRGB(26, 18, 40),    -- #1A1228 — main panel
+        Sidebar     = Color3.fromRGB(19, 13, 30),    -- dock / title bar well
+        Card        = Color3.fromRGB(36, 26, 54),
+        Elevated    = Color3.fromRGB(50, 36, 76),    -- resting buttons / inputs
+        Surface     = Color3.fromRGB(30, 21, 46),    -- scroll frame wells
+        Track       = Color3.fromRGB(60, 44, 88),
+        Accent      = Color3.fromRGB(176, 92, 255),  -- vivid violet
+        Accent2     = Color3.fromRGB(255, 102, 196), -- hot pink — pairs with Accent for glow/gradient "life"
+        AccentText  = Color3.fromRGB(18, 8, 28),     -- near-black plum for on-accent text (contrast ~5.4:1, AA)
+        Text        = Color3.fromRGB(244, 240, 250),
+        TextDim     = Color3.fromRGB(180, 168, 200),
+        TextFaint   = Color3.fromRGB(122, 108, 142),
+        Danger      = Color3.fromRGB(255, 82, 92),
         Stroke      = Color3.fromRGB(255, 255, 255),
         Font        = Enum.Font.Gotham,
         FontBold    = Enum.Font.GothamBold,
@@ -262,6 +267,39 @@ local function polish(btn, opts)
         return hl
 end
 
+-- Slow looping "breathing" glow — the one bit of motion that says "alive"
+-- without being distracting. Self-terminates once the instance is gone.
+local function livePulse(inst, prop, lo, hi, dur)
+        task.spawn(function()
+                while inst and inst.Parent do
+                        tw(inst, dur, { [prop] = hi }, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+                        task.wait(dur)
+                        if not (inst and inst.Parent) then break end
+                        tw(inst, dur, { [prop] = lo }, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+                        task.wait(dur)
+                end
+        end)
+end
+
+-- Two-stop violet -> pink gradient with a slow continuous rotation.
+-- Used sparingly on the panel border / active-tab accents for a bit of
+-- "growing" color life rather than a single flat static line.
+local function lifeGradient(inst, rotSpeed)
+        local grad = new("UIGradient", {
+                Color = ColorSequence.new(Theme.Accent, Theme.Accent2),
+                Rotation = 0,
+        }, inst)
+        task.spawn(function()
+                while inst and inst.Parent do
+                        local t = tw(grad, rotSpeed or 6, { Rotation = 360 }, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut)
+                        t.Completed:Wait()
+                        if not (inst and inst.Parent) then break end
+                        grad.Rotation = 0
+                end
+        end)
+        return grad
+end
+
 -- ================================================================
 -- // VECTOR ICON LIBRARY (zero external assets — always renders)
 -- ================================================================
@@ -325,7 +363,6 @@ function Icons.portal(parent, sz, color) -- Rifts page
         return f, { ring }, hole
 end
 
-
 function Icons.close(parent, sz, color)
         local f = iconBase(parent, sz)
         local a = shape(f, 0.5, 0.5, sz * 0.72, sz * 0.12, color, 2, 45)
@@ -351,107 +388,166 @@ ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 ScreenGui.Parent = PlayerGui
 
 -- ================================================================
--- // FLOATING TOGGLE BUTTON
+-- // FLOATING DOCK (icon rail — its own frame, not attached to a panel)
 -- ================================================================
-local ToggleButton = new("TextButton", {
-        Name = "ToggleButton", Size = UDim2.new(0, 52, 0, 52),
-        Position = UDim2.new(1, -68, 0, 24), BackgroundColor3 = Theme.Base,
-        AutoButtonColor = false, BorderSizePixel = 0, Text = "", ZIndex = 100,
+local Dock = new("CanvasGroup", {
+        Name = "Dock", AnchorPoint = Vector2.new(0, 0.5),
+        Position = UDim2.new(0, 18, 0.5, 0), Size = UDim2.new(0, 84, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = Theme.Sidebar,
+        BorderSizePixel = 0, Active = true, Visible = true, GroupTransparency = 1, ZIndex = 60,
 }, ScreenGui)
-corner(ToggleButton, 26)
-stroke(ToggleButton, Theme.Accent, 1.5, 0.55)
-new("UIAspectRatioConstraint", { AspectRatio = 1 }, ToggleButton)
-local toggleIconHolder = new("Frame", {
-        Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(0.5, 0, 0.5, 0),
-        AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1,
-}, ToggleButton)
-local _, toggleIconParts = Icons.menu(toggleIconHolder, 20, Theme.Accent)
-polish(ToggleButton)
+corner(Dock, 20)
+local dockStroke = stroke(Dock, Theme.Accent, 1, 0.6)
+lifeGradient(dockStroke, 8)
+local DockScale = new("UIScale", { Scale = 0.9 }, Dock)
+pad(Dock, 8, 10, 8, 12)
+new("UIListLayout", {
+        Padding = UDim.new(0, 8), HorizontalAlignment = Enum.HorizontalAlignment.Center,
+        SortOrder = Enum.SortOrder.LayoutOrder,
+}, Dock)
+
+local DockShadow = new("Frame", {
+        BackgroundColor3 = Theme.Backdrop, BackgroundTransparency = 0.5,
+        BorderSizePixel = 0, ZIndex = 58, Visible = false,
+}, ScreenGui)
+corner(DockShadow, 24)
+local function syncDockShadow()
+        DockShadow.Size = UDim2.new(0, Dock.AbsoluteSize.X + 14, 0, Dock.AbsoluteSize.Y + 14)
+        DockShadow.Position = UDim2.new(0, Dock.AbsolutePosition.X - 7, 0, Dock.AbsolutePosition.Y - 7)
+end
+Dock:GetPropertyChangedSignal("AbsoluteSize"):Connect(syncDockShadow)
+Dock:GetPropertyChangedSignal("AbsolutePosition"):Connect(syncDockShadow)
+syncDockShadow()
+
+-- Drag grip strip (top of dock, LayoutOrder 1)
+local DockGrip = new("Frame", { Size = UDim2.new(1, 0, 0, 14), BackgroundTransparency = 1, LayoutOrder = 1 }, Dock)
+local gripBar = new("Frame", {
+        Size = UDim2.new(0, 28, 0, 4), Position = UDim2.new(0.5, 0, 0.5, 0),
+        AnchorPoint = Vector2.new(0.5, 0.5), BackgroundColor3 = Theme.TextFaint, BorderSizePixel = 0,
+}, DockGrip)
+corner(gripBar, 2)
+
+-- Nav items live in here (LayoutOrder 2), one row per top-level entry
+local DockList = new("Frame", {
+        Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundTransparency = 1, LayoutOrder = 2,
+}, Dock)
+new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, DockList)
+
+-- Top-level nav row: icon + label, matches original sidebar button look,
+-- with an optional rotating chevron badge for entries that expand (Auto).
+local function navRow(parent, iconFn, label, order, hasChevron)
+        local btn = new("TextButton", {
+                Size = UDim2.new(1, 0, 0, 58), BackgroundColor3 = Theme.Accent, BackgroundTransparency = 1,
+                AutoButtonColor = false, BorderSizePixel = 0, Text = "", LayoutOrder = order,
+        }, parent)
+        corner(btn, 12)
+        local bar = new("Frame", {
+                Size = UDim2.new(0, 3, 0, 0), Position = UDim2.new(0, 0, 0.5, 0), AnchorPoint = Vector2.new(0, 0.5),
+                BackgroundColor3 = Theme.Accent, BorderSizePixel = 0,
+        }, btn)
+        corner(bar, 2)
+        local iconHolder = new("Frame", {
+                Size = UDim2.new(0, 22, 0, 22), Position = UDim2.new(0.5, 0, 0.30, 0),
+                AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1,
+        }, btn)
+        local _, iconParts = iconFn(iconHolder, 22, Theme.TextDim)
+        local lbl = new("TextLabel", {
+                Size = UDim2.new(1, -6, 0, 14), Position = UDim2.new(0.5, 0, 0.74, 0), AnchorPoint = Vector2.new(0.5, 0.5),
+                BackgroundTransparency = 1, Text = label, Font = Theme.FontBold, TextSize = 10, TextColor3 = Theme.TextDim,
+        }, btn)
+        local chevron
+        if hasChevron then
+                chevron = new("TextLabel", {
+                        Size = UDim2.new(0, 14, 0, 14), Position = UDim2.new(1, -3, 0, 3),
+                        AnchorPoint = Vector2.new(1, 0), BackgroundTransparency = 1, Text = ">",
+                        Font = Theme.FontBold, TextSize = 12, TextColor3 = Theme.TextDim, Rotation = 0,
+                }, btn)
+        end
+        polish(btn, { noScale = true })
+        return { btn = btn, bar = bar, iconParts = iconParts, lbl = lbl, chevron = chevron, name = label }
+end
 
 -- ================================================================
--- // MAIN WINDOW (CanvasGroup => free rounded clipping + fade animation)
+-- // FLOATING CONTENT PANEL (independent of the dock — appears on tap)
 -- ================================================================
-local MainFrame = new("CanvasGroup", {
-        Name = "MainFrame", AnchorPoint = Vector2.new(0.5, 0.5),
-        Position = UDim2.new(0.5, 0, 0.5, 0), Size = UDim2.new(0.38, 0, 0.72, 0),
+local ContentPanel = new("CanvasGroup", {
+        Name = "ContentPanel", AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0.58, 0, 0.5, 0), Size = UDim2.new(0.4, 0, 0.7, 0),
         BackgroundColor3 = Theme.Base, BorderSizePixel = 0, Active = true,
         Visible = false, GroupTransparency = 1, ZIndex = 50,
 }, ScreenGui)
-corner(MainFrame, 16)
-stroke(MainFrame, Theme.Accent, 1, 0.75)
-new("UISizeConstraint", { MinSize = Vector2.new(340, 460), MaxSize = Vector2.new(560, 720) }, MainFrame)
-local MainFrameScale = new("UIScale", { Scale = 0.9 }, MainFrame)
+corner(ContentPanel, 18)
+local panelStroke = stroke(ContentPanel, Theme.Accent, 1, 0.7)
+lifeGradient(panelStroke, 7)
+new("UISizeConstraint", { MinSize = Vector2.new(320, 420), MaxSize = Vector2.new(560, 720) }, ContentPanel)
+local ContentScale = new("UIScale", { Scale = 0.92 }, ContentPanel)
+local panelBaseScale = 1.0   -- user-adjustable via Settings > UI (Panel Size)
+local panelSizePercent = 100
 
--- Soft drop shadow behind the panel (no external image asset needed).
--- Parented to ScreenGui (siblings of MainFrame), so its bounds are kept in
--- sync with MainFrame's actual rendered pixels rather than guessed via Scale.
-local Shadow = new("Frame", {
+local PanelShadow = new("Frame", {
         AnchorPoint = Vector2.new(0, 0), BackgroundColor3 = Theme.Backdrop,
-        BackgroundTransparency = 0.45, BorderSizePixel = 0, ZIndex = 49,
+        BackgroundTransparency = 0.45, BorderSizePixel = 0, ZIndex = 49, Visible = false,
 }, ScreenGui)
-corner(Shadow, 20)
-local function syncShadow()
-        Shadow.Size = UDim2.new(0, MainFrame.AbsoluteSize.X + 16, 0, MainFrame.AbsoluteSize.Y + 16)
-        Shadow.Position = UDim2.new(0, MainFrame.AbsolutePosition.X - 8, 0, MainFrame.AbsolutePosition.Y - 2)
+corner(PanelShadow, 20)
+local function syncPanelShadow()
+        PanelShadow.Size = UDim2.new(0, ContentPanel.AbsoluteSize.X + 16, 0, ContentPanel.AbsoluteSize.Y + 16)
+        PanelShadow.Position = UDim2.new(0, ContentPanel.AbsolutePosition.X - 8, 0, ContentPanel.AbsolutePosition.Y - 2)
 end
-MainFrame:GetPropertyChangedSignal("AbsoluteSize"):Connect(syncShadow)
-MainFrame:GetPropertyChangedSignal("AbsolutePosition"):Connect(syncShadow)
-MainFrame:GetPropertyChangedSignal("Visible"):Connect(function()
-        Shadow.Visible = MainFrame.Visible
-end)
-syncShadow()
+ContentPanel:GetPropertyChangedSignal("AbsoluteSize"):Connect(syncPanelShadow)
+ContentPanel:GetPropertyChangedSignal("AbsolutePosition"):Connect(syncPanelShadow)
+syncPanelShadow()
 
 -- Title bar
-local TitleBar = new("Frame", {
+local PanelTitleBar = new("Frame", {
         Name = "TitleBar", Size = UDim2.new(1, 0, 0, 44),
         BackgroundColor3 = Theme.Sidebar, BorderSizePixel = 0, ZIndex = 2,
-}, MainFrame)
-local markHolder = new("Frame", {
+}, ContentPanel)
+local pMarkHolder = new("Frame", {
         Size = UDim2.new(0, 18, 0, 18), Position = UDim2.new(0, 14, 0.5, 0),
         AnchorPoint = Vector2.new(0, 0.5), BackgroundTransparency = 1,
-}, TitleBar)
-Icons.diamond(markHolder, 18, Theme.Accent)
-local TitleLabel = new("TextLabel", {
-        Size = UDim2.new(1, -110, 0, 18), Position = UDim2.new(0, 40, 0, 6),
+}, PanelTitleBar)
+Icons.diamond(pMarkHolder, 18, Theme.Accent)
+local PanelTitleLabel = new("TextLabel", {
+        Size = UDim2.new(1, -96, 0, 18), Position = UDim2.new(0, 40, 0, 6),
         BackgroundTransparency = 1, Text = "PILGRAMMED", TextColor3 = Theme.Text,
         TextXAlignment = Enum.TextXAlignment.Left, Font = Theme.FontBold, TextSize = 14,
-}, TitleBar)
-new("TextLabel", {
-        Size = UDim2.new(1, -110, 0, 14), Position = UDim2.new(0, 40, 0, 23),
-        BackgroundTransparency = 1, Text = "Ore Miner  -  Aurora UI", TextColor3 = Theme.TextFaint,
+}, PanelTitleBar)
+local PanelBreadcrumb = new("TextLabel", {
+        Size = UDim2.new(1, -96, 0, 14), Position = UDim2.new(0, 40, 0, 23),
+        BackgroundTransparency = 1, Text = "", TextColor3 = Theme.TextFaint,
         TextXAlignment = Enum.TextXAlignment.Left, Font = Theme.Font, TextSize = 10,
-}, TitleBar)
+}, PanelTitleBar)
 
-local CloseBtn = new("TextButton", {
+local PanelCloseBtn = new("TextButton", {
         Size = UDim2.new(0, 28, 0, 28), Position = UDim2.new(1, -38, 0.5, 0),
         AnchorPoint = Vector2.new(0, 0.5), BackgroundColor3 = Theme.Elevated,
         AutoButtonColor = false, BorderSizePixel = 0, Text = "",
-}, TitleBar)
-corner(CloseBtn, 14)
-local closeIconHolder = new("Frame", {
+}, PanelTitleBar)
+corner(PanelCloseBtn, 14)
+local panelCloseIconHolder = new("Frame", {
         Size = UDim2.new(0, 12, 0, 12), Position = UDim2.new(0.5, 0, 0.5, 0),
         AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1,
-}, CloseBtn)
-Icons.close(closeIconHolder, 12, Theme.TextDim)
-polish(CloseBtn, { radius = 14 })
+}, PanelCloseBtn)
+Icons.close(panelCloseIconHolder, 12, Theme.TextDim)
+polish(PanelCloseBtn, { radius = 14 })
 
--- (Old attached Sidebar removed — now using floating SidebarFrame)
-
--- Content area (also a CanvasGroup -> smooth cross-fade page transitions)
-local ContentArea = new("CanvasGroup", {
-        Name = "ContentArea", Size = UDim2.new(1, 0, 1, -44), Position = UDim2.new(0, 0, 0, 44),
+-- Body (also a CanvasGroup -> smooth cross-fade between pages)
+local ContentBody = new("CanvasGroup", {
+        Name = "ContentBody", Size = UDim2.new(1, 0, 1, -44), Position = UDim2.new(0, 0, 0, 44),
         BackgroundColor3 = Theme.Base, BackgroundTransparency = 1,
-}, MainFrame)
+}, ContentPanel)
 
 local Pages = {}
 
 local function newPage(name)
         local page = new("ScrollingFrame", {
                 Name = name .. "Page", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1,
-                ScrollBarThickness = 4, ScrollBarImageColor3 = Theme.Accent, ScrollBarImageTransparency = 0.3,
+                ScrollBarThickness = 5, ScrollBarImageColor3 = Theme.Accent, ScrollBarImageTransparency = 0.2,
                 CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y,
-                Visible = false,
-        }, ContentArea)
+                ScrollingDirection = Enum.ScrollingDirection.Y, ElasticBehavior = Enum.ElasticBehavior.WhenScrollable,
+                Active = true, Visible = false,
+        }, ContentBody)
         pad(page, 16, 14, 14, 16)
         new("UIListLayout", { Padding = UDim.new(0, 14), SortOrder = Enum.SortOrder.LayoutOrder }, page)
         Pages[name] = page
@@ -459,7 +555,7 @@ local function newPage(name)
 end
 
 -- ================================================================
--- // CONTENT-BUILDING HELPERS (used across all 6 pages)
+-- // CONTENT-BUILDING HELPERS (used across all pages)
 -- ================================================================
 
 local function card(parent, order, titleText, titleColor)
@@ -679,28 +775,26 @@ end
 -- ================================================================
 -- // PLAYER PAGE
 -- ================================================================
-local PlayerParryPage = newPage("Parry")
+local UI = {}  -- shared table for UI refs (avoids 200-local limit)
 
-local parryCard = card(PlayerParryPage, 1, "Auto Parry")
+local PlayerPage = newPage("Player")
+
+local parryCard = card(PlayerPage, 1, "Auto Parry")
 caption(parryCard, 1, "Blocks enemy attacks automatically using a 2-layer detector (attack-warning remote + animation watch).")
 local AutoParryBtn = actionButton(parryCard, 2, "Auto Parry: OFF")
 caption(parryCard, 3, "Hold: " .. tostring(PARRY_HOLD_TIME) .. "s   |   Cooldown: " .. tostring(PARRY_COOLDOWN) .. "s")
 local ParryStatus = statusLabel(parryCard, 4, "Status: Idle")
 
-local spamCard = card(PlayerParryPage, 2, "Spam Parry")
+local spamCard = card(PlayerPage, 2, "Spam Parry")
 caption(spamCard, 1, "Holds and releases block in a continuous loop.")
 local SpamParryBtn = actionButton(spamCard, 2, "Spam Parry: OFF")
 local SpamParryDownBtn, SpamParryUpBtn, SpamParryLenLabel = stepper(spamCard, 3, "Hold length: " .. string.format("%.2f", State.spamParryLength) .. "s", 0.1, 0.7)
 local SpamParryStatus = statusLabel(spamCard, 4, "Idle")
 
 -- ================================================================
--- // AUTO PAGE (ore mining + gold deposit)
+-- // AUTO > FARM  (ore mining + mob farm + camp farm + attack position)
 -- ================================================================
-local AutoFarmPage = newPage("Farm")
-local AutoGoldPage = newPage("Gold")
-local AutoEventPage = newPage("Event")
-local AutoRiftsPage = newPage("Rifts")
-local AutoFishingPage = newPage("Fishing")
+local AutoFarmPage = newPage("AutoFarm")
 
 local oreCard = card(AutoFarmPage, 1, "Ore Selection")
 local SearchBox, SelectAllBtn, DeselectAllBtn, OreScroll, SelectedLabel = searchSection(oreCard, 1, "Search ores...")
@@ -722,39 +816,6 @@ local AllOresBtn = new("TextButton", {
 corner(AllOresBtn, 12); polish(AllOresBtn)
 local StatusLabel = statusLabel(mineCard, 2, "Status: Idle | Fly: OFF")
 local MineAutoEquipBtn = actionButton(mineCard, 3, "Auto-Equip Pickaxe: OFF")
-
-local goldCard = card(AutoGoldPage, 1, "Auto Deposit Gold")
-local AutoDepositBtn = actionButton(goldCard, 1, "Auto Deposit: OFF")
-local GoldThreshDownBtn, GoldThreshUpBtn, GoldThresholdLabel = stepper(goldCard, 2, "Cooldown: " .. string.format("%.1f", AUTO_DEPOSIT_COOLDOWN) .. "s", 0.5, 30)
-local GoldStatus = statusLabel(goldCard, 3, "Status: Idle")
-
--- Gold Farm Chicken Method
-ChickenFarmBtn = nil
-ChickenDrinkBtn = nil
-ChickenStatus = nil
-ChickenWeaponBox = nil
-do
-local chickenCard = card(AutoGoldPage, 2, "Gold Farm Chicken Method")
-local ChickenRangeDownBtn, ChickenRangeUpBtn, ChickenRangeLabel = stepper(chickenCard, 1, "Detect range: 30 studs", 5, 100)
-ChickenWeaponBox = textInput(chickenCard, 2, "Weapon name (bow or melee)", "")
-ChickenFarmBtn = actionButton(chickenCard, 3, "Start Chicken Farm", "primary")
-ChickenDrinkBtn = actionButton(chickenCard, 4, "Auto Drink Magmatic: OFF")
-ChickenStatus = statusLabel(chickenCard, 5, "Status: Idle")
-
-ChickenRangeDownBtn.MouseButton1Click:Connect(function()
-        State.chickenRange = math.max(5, State.chickenRange - 5)
-        ChickenRangeLabel.Text = "Detect range: " .. tostring(State.chickenRange) .. " studs"
-end)
-ChickenRangeUpBtn.MouseButton1Click:Connect(function()
-        State.chickenRange = math.min(100, State.chickenRange + 5)
-        ChickenRangeLabel.Text = "Detect range: " .. tostring(State.chickenRange) .. " studs"
-end)
-end
-
--- ================================================================
--- // MOB PAGE (mob farm, camp farm, attack position, auto bow)
--- ================================================================
--- (Mob page content merged into Auto > Farm)
 
 local mobSelCard = card(AutoFarmPage, 3, "Mob Selection")
 local MobSearchBox, MobSelAllBtn, MobClrAllBtn, MobScroll, MobSelectedLabel = searchSection(mobSelCard, 1, "Search mobs...")
@@ -812,16 +873,94 @@ local BehindDistDownBtn, BehindDistUpBtn, BehindDistLabel = stepper(atkPosCard, 
 local CustomOffsetBox, CustomOffsetApplyBtn = inputWithButton(atkPosCard, 5, "Custom offset: x,y,z", "", "Apply")
 
 -- ================================================================
--- // FIGHT PAGE (weapons)
+-- // AUTO > GOLD
 -- ================================================================
-local FightWeaponsPage = newPage("Weapons")
-local bowCard = card(FightWeaponsPage, 1, "Auto Bow")
-local BowNameBox = textInput(bowCard, 1, "Bow name", "")
-local BowRateDownBtn, BowRateUpBtn, BowRateLabel = stepper(bowCard, 2, "Bow Shoot Rate: " .. string.format("%.2f", State.bowShootRate) .. "s", 0.05, 2.0)
-local AutoBowBtn = actionButton(bowCard, 3, "Start Auto Bow", "primary")
-local BowAutoEquipBtn = actionButton(bowCard, 4, "Auto-Equip: OFF (manual hold only)")
-local BowStatus = statusLabel(bowCard, 5, "Idle")
+local AutoGoldPage = newPage("AutoGold")
+local goldCard = card(AutoGoldPage, 1, "Auto Deposit Gold")
+local AutoDepositBtn = actionButton(goldCard, 1, "Auto Deposit: OFF")
+local GoldThreshDownBtn, GoldThreshUpBtn, GoldThresholdLabel = stepper(goldCard, 2, "Cooldown: " .. string.format("%.1f", AUTO_DEPOSIT_COOLDOWN) .. "s", 0.5, 30)
+local GoldStatus = statusLabel(goldCard, 3, "Status: Idle")
 
+-- ================================================================
+-- // AUTO > EVENT  (was: Junkpits)
+-- ================================================================
+local AutoEventPage = newPage("AutoEvent")
+do
+local cronoCard = card(AutoEventPage, 1, "Crono's Key Collect")
+UI.CronoKeyBtn = actionButton(cronoCard, 1, "Start Crono Key Collect", "primary")
+UI.CronoKeyStatus = statusLabel(cronoCard, 2, "Idle")
+
+local deleteCard = card(AutoEventPage, 2, "Delete Enemies")
+UI.DeleteBtn = actionButton(deleteCard, 1, "Start Delete Enemies", "primary")
+UI.DeleteStatus = statusLabel(deleteCard, 2, "Idle")
+end
+
+-- ================================================================
+-- // AUTO > RIFTS
+-- ================================================================
+local AutoRiftsPage = newPage("AutoRifts")
+do
+local riftsCard = card(AutoRiftsPage, 1, "Auto Rifts")
+caption(riftsCard, 1, "Automatically detects and clears nearby rifts.")
+UI.RiftsRadiusDownBtn, UI.RiftsRadiusUpBtn, UI.RiftsRadiusLabel = stepper(riftsCard, 2, "Mob detect radius: " .. tostring(State.riftsRadius) .. " studs", 50, 5000)
+UI.AutoRiftsBtn = actionButton(riftsCard, 3, "Start Auto Rifts", "primary")
+UI.RiftsStatus = statusLabel(riftsCard, 4, "Idle")
+
+local riftsModeCard = card(AutoRiftsPage, 2, "Activation Mode")
+UI.RiftsMobileBtn, UI.RiftsDesktopBtn = segmented(riftsModeCard, 1, { "Mobile", "Desktop" })
+end
+
+-- ================================================================
+-- // AUTO > FISHING
+-- ================================================================
+local AutoFishingPage = newPage("AutoFishing")
+do
+local fishCard = card(AutoFishingPage, 1, "Auto Fishing")
+local RodNameBox = textInput(fishCard, 1, "Rod name (e.g. Rod of Kings)", "")
+local FishWaitDownBtn, FishWaitUpBtn, FishWaitLabel = stepper(fishCard, 2, "Wait before reel: " .. string.format("%.2f", State.fishWaitSeconds) .. " sec", 0.1, 15)
+local AutoFishBtn = actionButton(fishCard, 3, "Start Auto Fish", "primary")
+local FishStatus = statusLabel(fishCard, 4, "Status: Idle")
+end
+
+-- ================================================================
+-- // GOLD FARM CHICKEN METHOD (in Auto > Gold page)
+-- ================================================================
+ChickenFarmBtn = nil
+ChickenDrinkBtn = nil
+ChickenStatus = nil
+ChickenWeaponBox = nil
+do
+local chickenCard = card(AutoGoldPage, 3, "Gold Farm Chicken Method")
+local ChickenRangeDownBtn, ChickenRangeUpBtn, ChickenRangeLabel = stepper(chickenCard, 1, "Detect range: 30 studs", 5, 100)
+ChickenWeaponBox = textInput(chickenCard, 2, "Weapon name (bow or melee)", "")
+ChickenFarmBtn = actionButton(chickenCard, 3, "Start Chicken Farm", "primary")
+ChickenDrinkBtn = actionButton(chickenCard, 4, "Auto Drink Magmatic: OFF")
+ChickenStatus = statusLabel(chickenCard, 5, "Status: Idle")
+
+ChickenRangeDownBtn.MouseButton1Click:Connect(function()
+        State.chickenRange = math.max(5, State.chickenRange - 5)
+        ChickenRangeLabel.Text = "Detect range: " .. tostring(State.chickenRange) .. " studs"
+end)
+ChickenRangeUpBtn.MouseButton1Click:Connect(function()
+        State.chickenRange = math.min(100, State.chickenRange + 5)
+        ChickenRangeLabel.Text = "Detect range: " .. tostring(State.chickenRange) .. " studs"
+end)
+end
+
+-- ================================================================
+-- // FIGHT  (weapons)
+-- ================================================================
+local FightPage = newPage("Fight")
+do
+local bowCard = card(FightPage, 1, "Auto Bow")
+UI.BowNameBox = textInput(bowCard, 1, "Bow name", "")
+UI.BowRateDownBtn, UI.BowRateUpBtn, UI.BowRateLabel = stepper(bowCard, 2, "Bow Shoot Rate: " .. string.format("%.2f", State.bowShootRate) .. "s", 0.05, 2.0)
+UI.AutoBowBtn = actionButton(bowCard, 3, "Start Auto Bow", "primary")
+local BowAutoEquipBtn = actionButton(bowCard, 4, "Auto-Equip: OFF (manual hold only)")
+UI.BowStatus = statusLabel(bowCard, 5, "Idle")
+
+-- This one small toggle is wired at creation time (outside the logic pcall),
+-- kept exactly as in the original to preserve behaviour identically.
 BowAutoEquipBtn.MouseButton1Click:Connect(function()
         State.bowAutoEquip = not State.bowAutoEquip
         if State.bowAutoEquip then
@@ -834,6 +973,7 @@ BowAutoEquipBtn.MouseButton1Click:Connect(function()
                 BowAutoEquipBtn.TextColor3 = Theme.Text
         end
 end)
+end
 
 -- Mining auto-equip toggle
 MineAutoEquipBtn.MouseButton1Click:Connect(function()
@@ -878,342 +1018,206 @@ CampAutoEquipBtn.MouseButton1Click:Connect(function()
 end)
 
 -- ================================================================
--- // SETTINGS PAGE
+-- // SETTINGS
 -- ================================================================
-local SettingsUIPage = newPage("UI Settings")
-local SettingsKillPage = newPage("Kill Script")
-local UI = {}  -- shared table for UI refs (avoids 200-local limit)
-
+local SettingsPage = newPage("Settings")
 do
-local timingCard = card(SettingsUIPage, 1, "Timing")
+local uiSizeCard = card(SettingsPage, 1, "UI")
+caption(uiSizeCard, 1, "Adjust the size of this panel. Starts smaller for phones -- turn it up on PC.")
+local UISizeDownBtn, UISizeUpBtn, UISizeLabel = stepper(uiSizeCard, 2, "Panel Size: 100%", 70, 140)
+
+local moveCard = card(SettingsPage, 2, "Movement")
+local moveRow = new("Frame", { Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1, LayoutOrder = 1 }, moveCard)
+new("TextLabel", {
+        Size = UDim2.new(1, -60, 1, 0), BackgroundTransparency = 1, Text = "Toggle-square move mode",
+        Font = Theme.Font, TextSize = 12, TextColor3 = Theme.TextDim, TextXAlignment = Enum.TextXAlignment.Left,
+}, moveRow)
+UI.MoveToggleBtn = new("TextButton", {
+        Size = UDim2.new(0, 54, 0, 28), Position = UDim2.new(1, -54, 0, 2), BackgroundColor3 = Theme.Elevated,
+        BorderSizePixel = 0, Text = "OFF", Font = Theme.FontBold, TextSize = 12, TextColor3 = Theme.TextDim,
+        AutoButtonColor = false,
+}, moveRow)
+corner(UI.MoveToggleBtn, 10); polish(UI.MoveToggleBtn, { noScale = true })
+
+local timingCard = card(SettingsPage, 3, "Timing")
 UI.SwingDownBtn, UI.SwingUpBtn, UI.SwingLabel = stepper(timingCard, 1, "Swing Interval: " .. string.format("%.2f", SWING_INTERVAL) .. "s", 0.1, 1.0)
 UI.RangeDownBtn, UI.RangeUpBtn, UI.RangeLabel = stepper(timingCard, 2, "Parry Range: " .. tostring(PARRY_RANGE) .. " studs", 5, 100)
 
-        local sizeCard = card(SettingsUIPage, 2, "UI Scale")
-        UI.SizeDownBtn, UI.SizeUpBtn, UI.SizeLabel = stepper(sizeCard, 1, "UI Scale: " .. string.format("%.2f", 1.0) .. "x", 0.5, 2.0)
-
-        local dragCard = card(SettingsUIPage, 3, "Page Position")
-        caption(dragCard, 1, "Enable dragging to move the page UI anywhere on screen. Disable to lock it in place.")
-        local dragRow = new("Frame", { Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1, LayoutOrder = 2 }, dragCard)
-        new("TextLabel", {
-                Size = UDim2.new(1, -60, 1, 0), BackgroundTransparency = 1, Text = "Page Draggable",
-                Font = Theme.Font, TextSize = 12, TextColor3 = Theme.TextDim, TextXAlignment = Enum.TextXAlignment.Left,
-        }, dragRow)
-        UI.DragToggleBtn = new("TextButton", {
-                Size = UDim2.new(0, 54, 0, 28), Position = UDim2.new(1, -54, 0, 2), BackgroundColor3 = Theme.Elevated,
-                BorderSizePixel = 0, Text = "OFF", Font = Theme.FontBold, TextSize = 12, TextColor3 = Theme.TextDim,
-                AutoButtonColor = false,
-        }, dragRow)
-        corner(UI.DragToggleBtn, 10); polish(UI.DragToggleBtn, { noScale = true })
-        UI.ResetPosBtn = actionButton(dragCard, 3, "Reset Position to Center")
-        local moveRow2 = new("Frame", { Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1, LayoutOrder = 4 }, dragCard)
-        new("TextLabel", {
-                Size = UDim2.new(1, -60, 1, 0), BackgroundTransparency = 1, Text = "Toggle Button Moveable (3-line)",
-                Font = Theme.Font, TextSize = 12, TextColor3 = Theme.TextDim, TextXAlignment = Enum.TextXAlignment.Left,
-        }, moveRow2)
-        UI.MoveToggleBtn = new("TextButton", {
-                Size = UDim2.new(0, 54, 0, 28), Position = UDim2.new(1, -54, 0, 2), BackgroundColor3 = Theme.Elevated,
-                BorderSizePixel = 0, Text = "OFF", Font = Theme.FontBold, TextSize = 12, TextColor3 = Theme.TextDim,
-                AutoButtonColor = false, LayoutOrder = 5,
-        }, moveRow2)
-        corner(UI.MoveToggleBtn, 10); polish(UI.MoveToggleBtn, { noScale = true })
-
-local dangerCard = card(SettingsKillPage, 1, "Danger Zone", Theme.Danger)
+local dangerCard = card(SettingsPage, 4, "Danger Zone", Theme.Danger)
 caption(dangerCard, 1, "Stops every feature and completely destroys the UI. This cannot be undone without re-running the script.")
 UI.KillScriptBtn = actionButton(dangerCard, 2, "Kill Script", "danger")
 
-end
-
--- (Junkpits content merged into Auto > Event)
-
-do
-local cronoCard = card(AutoEventPage, 1, "Crono's Key Collect")
-UI.CronoKeyBtn = actionButton(cronoCard, 1, "Start Crono Key Collect", "primary")
-UI.CronoKeyStatus = statusLabel(cronoCard, 2, "Idle")
-
-local deleteCard = card(AutoEventPage, 2, "Delete Enemies")
-UI.DeleteBtn = actionButton(deleteCard, 1, "Start Delete Enemies", "primary")
-UI.DeleteStatus = statusLabel(deleteCard, 2, "Idle")
-
-end
-
--- (Rifts content merged into Auto > Rifts)
-
-do
-local riftsCard = card(AutoRiftsPage, 1, "Auto Rifts")
-caption(riftsCard, 1, "Automatically detects and clears nearby rifts.")
-UI.RiftsRadiusDownBtn, UI.RiftsRadiusUpBtn, UI.RiftsRadiusLabel = stepper(riftsCard, 2, "Mob detect radius: " .. tostring(State.riftsRadius) .. " studs", 50, 5000)
-UI.AutoRiftsBtn = actionButton(riftsCard, 3, "Start Auto Rifts", "primary")
-UI.RiftsStatus = statusLabel(riftsCard, 4, "Idle")
-
-local riftsModeCard = card(AutoRiftsPage, 2, "Activation Mode")
-UI.RiftsMobileBtn, UI.RiftsDesktopBtn = segmented(riftsModeCard, 1, { "Mobile", "Desktop" })
-
+-- UI size is visual-only (no automation reads it), so it's safe to wire here
+-- at creation time, same convention as the Bow Auto-Equip toggle above.
+UISizeDownBtn.MouseButton1Click:Connect(function()
+        panelSizePercent = math.max(70, panelSizePercent - 5)
+        UISizeLabel.Text = "Panel Size: " .. tostring(panelSizePercent) .. "%"
+        panelBaseScale = panelSizePercent / 100
+        if ContentPanel.Visible then tw(ContentScale, 0.15, { Scale = panelBaseScale }) end
+end)
+UISizeUpBtn.MouseButton1Click:Connect(function()
+        panelSizePercent = math.min(140, panelSizePercent + 5)
+        UISizeLabel.Text = "Panel Size: " .. tostring(panelSizePercent) .. "%"
+        panelBaseScale = panelSizePercent / 100
+        if ContentPanel.Visible then tw(ContentScale, 0.15, { Scale = panelBaseScale }) end
+end)
 end
 
 -- ================================================================
--- // FISHING PAGE
+-- // NAVIGATION (dock rail + independent floating content panel)
 -- ================================================================
-local fishCard = card(AutoFishingPage, 1, "Auto Fishing")
-local RodNameBox = textInput(fishCard, 1, "Rod name (e.g. Rod of Kings)", "Rod of Kings")
-local FishWaitDownBtn, FishWaitUpBtn, FishWaitLabel = stepper(fishCard, 2, "Wait before reel: " .. string.format("%.2f", State.fishWaitSeconds) .. " sec", 0.1, 15)
-local AutoFishBtn = actionButton(fishCard, 3, "Start Auto Fish", "primary")
-local FishStatus = statusLabel(fishCard, 4, "Status: Idle")
+local navEntries = {}      -- top-level dock entries, for active-state styling
+local currentOpenKey = nil -- key of the leaf whose content is showing, or nil
+local autoExpanded = false
 
--- ================================================================
--- // FLOATING SIDEBAR (scrollable, expandable, toggle pages)
--- ================================================================
+local playerEntry = navRow(DockList, Icons.player, "Player", 1, false)
+navEntries[#navEntries + 1] = playerEntry
 
--- Sidebar is a separate floating frame, not attached to MainFrame
-local SidebarFrame = new("Frame", {
-        Name = "SidebarFloat", Size = UDim2.new(0, 72, 0, 380),
-        Position = UDim2.new(0, 10, 0.5, -190),
-        BackgroundColor3 = Color3.fromRGB(22, 18, 32), BorderSizePixel = 0,
-        ZIndex = 60, Active = true,
-}, ScreenGui)
-corner(SidebarFrame, 16)
-stroke(SidebarFrame, Color3.fromRGB(80, 50, 120), 1.5, 0.9)
+local autoEntry = navRow(DockList, Icons.diamond, "Auto", 2, true)
+navEntries[#navEntries + 1] = autoEntry
 
--- Subtle purple glow
-local sidebarGlow = new("ImageLabel", {
-        Size = UDim2.new(1, 40, 1, 40), Position = UDim2.new(0, -20, 0, -20),
-        BackgroundTransparency = 1, Image = "rbxassetid://5028857084",
-        ImageColor3 = Color3.fromRGB(100, 60, 160), ImageTransparency = 0.85,
-        ScaleType = Enum.ScaleType.Slice, SliceCenter = Rect.new(10, 10, 10, 10),
-        ZIndex = 59,
-}, SidebarFrame)
+local AutoChildrenWrap = new("Frame", {
+        Name = "AutoChildren", Size = UDim2.new(1, 0, 0, 0), ClipsDescendants = true,
+        BackgroundTransparency = 1, LayoutOrder = 3,
+}, DockList)
+new("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder }, AutoChildrenWrap)
+pad(AutoChildrenWrap, 6, 6, 2, 2)
 
--- Scrollable sidebar content
-local SidebarScroll = new("ScrollingFrame", {
-        Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1,
-        ScrollBarThickness = 3, ScrollBarImageColor3 = Color3.fromRGB(120, 80, 180),
-        ScrollBarImageTransparency = 0.5, CanvasSize = UDim2.new(0, 0, 0, 0),
-        AutomaticCanvasSize = Enum.AutomaticSize.Y,
-}, SidebarFrame)
-pad(SidebarScroll, 6, 8, 6, 8)
-local sidebarLayout = new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, SidebarScroll)
-
--- Navigation state
-local NavState = {
-        currentGroup = nil,      -- which group is expanded ("Auto", "Player", "Fight", "Settings")
-        currentPage = nil,       -- which sub-page is visible
-        pageVisible = false,     -- is any page visible?
+local autoChildDefs = {
+        { key = "AutoFarm", label = "Farm" },
+        { key = "AutoGold", label = "Gold" },
+        { key = "AutoEvent", label = "Event" },
+        { key = "AutoRifts", label = "Rifts" },
+        { key = "AutoFishing", label = "Fishing" },
 }
-
--- Hide all pages by default
-for _, page in pairs(Pages) do page.Visible = false end
-
--- Make MainFrame start hidden (only sidebar visible)
-MainFrame.Visible = false
-
--- Helper: create a group button (top-level)
-local groupButtons = {}
-local subButtons = {}
-
-local function makeGroupBtn(parent, order, label, iconFn, isExpanded)
-        local btn = new("TextButton", {
-                Size = UDim2.new(1, 0, 0, 48), BackgroundColor3 = Color3.fromRGB(30, 24, 44),
-                BorderSizePixel = 0, Text = "", AutoButtonColor = false, LayoutOrder = order,
-        }, parent)
-        corner(btn, 12)
-        local iconHolder = new("Frame", {
-                Size = UDim2.new(0, 22, 0, 22), Position = UDim2.new(0.5, 0, 0.30, 0),
-                AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1,
-        }, btn)
-        local _, iconParts = iconFn(iconHolder, 20, Color3.fromRGB(180, 140, 255))
-        local lbl = new("TextLabel", {
-                Size = UDim2.new(1, -6, 0, 12), Position = UDim2.new(0.5, 0, 0.80, 0),
-                AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1, Text = label,
-                Font = Theme.FontBold, TextSize = 9, TextColor3 = Color3.fromRGB(160, 130, 200),
-        }, btn)
-        -- Expand/collapse indicator (">" or "v")
-        local expandIcon = new("TextLabel", {
-                Size = UDim2.new(0, 14, 0, 14), Position = UDim2.new(1, -16, 0.30, 0),
-                AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1,
-                Text = isExpanded and "v" or ">", Font = Theme.FontBold, TextSize = 10,
-                TextColor3 = Color3.fromRGB(140, 110, 180),
-        }, btn)
-        polish(btn, { noScale = true })
-        return btn, iconParts, lbl, expandIcon
+local autoChildBtns = {}
+for i, def in ipairs(autoChildDefs) do
+        local b = new("TextButton", {
+                Size = UDim2.new(1, 0, 0, 28), BackgroundColor3 = Theme.Accent, BackgroundTransparency = 1,
+                AutoButtonColor = false, BorderSizePixel = 0, Text = def.label, Font = Theme.FontBold,
+                TextSize = 10, TextColor3 = Theme.TextDim, LayoutOrder = i,
+        }, AutoChildrenWrap)
+        corner(b, 8)
+        polish(b, { noScale = true, radius = 8 })
+        autoChildBtns[i] = { btn = b, key = def.key, label = def.label }
 end
+local autoChildRowH, autoChildGap = 28, 3
+local autoOpenHeight = (#autoChildDefs * autoChildRowH) + ((#autoChildDefs - 1) * autoChildGap) + 8
 
--- Helper: create a sub-button (indented, appears when group expanded)
-local function makeSubBtn(parent, order, label)
-        local btn = new("TextButton", {
-                Size = UDim2.new(1, 0, 0, 34), BackgroundColor3 = Color3.fromRGB(26, 20, 38),
-                BorderSizePixel = 0, Text = "  " .. label, Font = Theme.Font, TextSize = 11,
-                TextColor3 = Color3.fromRGB(150, 130, 180), TextXAlignment = Enum.TextXAlignment.Left,
-                AutoButtonColor = false, LayoutOrder = order,
-        }, parent)
-        corner(btn, 8)
-        polish(btn, { noScale = true })
-        -- Left accent bar (only shows when active)
-        local bar = new("Frame", {
-                Size = UDim2.new(0, 3, 0, 0), Position = UDim2.new(0, 0, 0.5, 0),
-                AnchorPoint = Vector2.new(0, 0.5), BackgroundColor3 = Color3.fromRGB(160, 100, 255),
-                BorderSizePixel = 0,
-        }, btn)
-        corner(bar, 2)
-        return btn, bar
-end
+local fightEntry = navRow(DockList, Icons.cross, "Fight", 4, false)
+navEntries[#navEntries + 1] = fightEntry
 
--- Define navigation structure
--- Each group: { label, icon, subs = { {name, pageName}, ... } }
-local navGroups = {
-        { label = "Auto", icon = Icons.diamond, order = 1, subs = {
-                { name = "Farm", page = "Farm" },
-                { name = "Gold", page = "Gold" },
-                { name = "Event", page = "Event" },
-                { name = "Rifts", page = "Rifts" },
-                { name = "Fishing", page = "Fishing" },
-        }},
-        { label = "Player", icon = Icons.player, order = 2, subs = {
-                { name = "Parry", page = "Parry" },
-        }},
-        { label = "Fight", icon = Icons.cross, order = 3, subs = {
-                { name = "Weapons", page = "Weapons" },
-        }},
-        { label = "Settings", icon = Icons.gear, order = 4, subs = {
-                { name = "UI", page = "UI Settings" },
-                { name = "Kill", page = "Kill Script" },
-        }},
-}
+local settingsEntry = navRow(DockList, Icons.gear, "Settings", 5, false)
+navEntries[#navEntries + 1] = settingsEntry
 
--- Build the sidebar
-local groupEntries = {}
-local subEntries = {}
-local layoutOrder = 1
-
-for _, group in ipairs(navGroups) do
-        -- Create group button
-        local btn, iconParts, lbl, expandIcon = makeGroupBtn(SidebarScroll, layoutOrder, group.label, group.icon, false)
-        layoutOrder = layoutOrder + 1
-
-        local entry = {
-                btn = btn, iconParts = iconParts, lbl = lbl, expandIcon = expandIcon,
-                group = group, subBtns = {}, expanded = false,
-        }
-        table.insert(groupEntries, entry)
-
-        -- Create sub-buttons (hidden initially)
-        for _, sub in ipairs(group.subs) do
-                local subBtn, subBar = makeSubBtn(SidebarScroll, layoutOrder, sub.name)
-                subBtn.Visible = false
-                layoutOrder = layoutOrder + 1
-
-                table.insert(entry.subBtns, { btn = subBtn, bar = subBar, sub = sub })
-                subEntries[sub.page] = { btn = subBtn, bar = subBar, group = entry }
+local function setActiveNav(activeEntry)
+        for _, e in ipairs(navEntries) do
+                local isActive = (e == activeEntry)
+                tw(e.btn, 0.18, { BackgroundTransparency = isActive and 0.88 or 1 })
+                tw(e.bar, 0.18, { Size = UDim2.new(0, 3, 0, isActive and 26 or 0) })
+                tw(e.lbl, 0.15, { TextColor3 = isActive and Theme.Text or Theme.TextDim })
+                for _, p in ipairs(e.iconParts) do
+                        tw(p, 0.15, { BackgroundColor3 = isActive and Theme.Accent or Theme.TextDim })
+                end
         end
+end
 
-        -- Group button click: expand/collapse
-        btn.MouseButton1Click:Connect(function()
-                -- Collapse all other groups
-                for _, other in ipairs(groupEntries) do
-                        if other ~= entry and other.expanded then
-                                other.expanded = false
-                                other.expandIcon.Text = ">"
-                                for _, sb in ipairs(other.subBtns) do
-                                        sb.btn.Visible = false
+local function setActiveChild(activeBtn)
+        for _, c in ipairs(autoChildBtns) do
+                local isActive = (c.btn == activeBtn)
+                tw(c.btn, 0.15, { BackgroundTransparency = isActive and 0.85 or 1, TextColor3 = isActive and Theme.Text or Theme.TextDim })
+        end
+end
+
+local function setAutoExpanded(open)
+        autoExpanded = open
+        tw(AutoChildrenWrap, 0.2, { Size = UDim2.new(1, 0, 0, open and autoOpenHeight or 0) }, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+        tw(autoEntry.chevron, 0.2, { Rotation = open and 90 or 0 })
+        tw(autoEntry.lbl, 0.15, { TextColor3 = (open or currentOpenKey == "AutoFarm" or currentOpenKey == "AutoGold" or currentOpenKey == "AutoEvent" or currentOpenKey == "AutoRifts" or currentOpenKey == "AutoFishing") and Theme.Text or Theme.TextDim })
+end
+
+autoEntry.btn.MouseButton1Click:Connect(function()
+        setAutoExpanded(not autoExpanded)
+end)
+
+local function closeContentPanel()
+        if not currentOpenKey then return end
+        currentOpenKey = nil
+        tw(ContentPanel, 0.14, { GroupTransparency = 1 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+        tw(ContentScale, 0.14, { Scale = panelBaseScale * 0.94 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+        task.delay(0.14, function()
+                if not currentOpenKey then
+                        ContentPanel.Visible = false
+                        PanelShadow.Visible = false
+                end
+        end)
+end
+
+local function openLeaf(key, label, crumb)
+        if not Pages[key] then return end
+        local wasVisible = ContentPanel.Visible
+        currentOpenKey = key
+        PanelBreadcrumb.Text = crumb or label
+        for name, frame in pairs(Pages) do
+                frame.Visible = (name == key)
+        end
+        if wasVisible then return end -- already open elsewhere: just swapped content, no re-pop
+        ContentPanel.Visible = true
+        PanelShadow.Visible = true
+        tw(ContentPanel, 0.22, { GroupTransparency = 0 }, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+        tw(ContentScale, 0.22, { Scale = panelBaseScale }, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+end
+
+-- key/label/crumb identify the page; activateFn sets which dock element(s)
+-- light up; onOpen runs any one-off side effect (e.g. refreshing a list).
+local function toggleLeaf(key, label, crumb, activateFn, onOpen)
+        if currentOpenKey == key and ContentPanel.Visible then
+                closeContentPanel()
+                setActiveNav(nil)
+                setActiveChild(nil)
+                return
+        end
+        setActiveNav(nil)
+        setActiveChild(nil)
+        if activateFn then activateFn() end
+        openLeaf(key, label, crumb)
+        if onOpen then pcall(onOpen) end
+end
+
+playerEntry.btn.MouseButton1Click:Connect(function()
+        toggleLeaf("Player", "Player", "Player", function() setActiveNav(playerEntry) end)
+end)
+
+fightEntry.btn.MouseButton1Click:Connect(function()
+        toggleLeaf("Fight", "Fight", "Fight", function() setActiveNav(fightEntry) end)
+end)
+
+settingsEntry.btn.MouseButton1Click:Connect(function()
+        toggleLeaf("Settings", "Settings", "Settings", function() setActiveNav(settingsEntry) end)
+end)
+
+for _, c in ipairs(autoChildBtns) do
+        c.btn.MouseButton1Click:Connect(function()
+                toggleLeaf(c.key, c.label, "Auto  ›  " .. c.label,
+                        function()
+                                setActiveNav(autoEntry)
+                                setActiveChild(c.btn)
+                        end,
+                        function()
+                                if c.key == "AutoFarm" then
+                                        pcall(function() if refreshOreList then refreshOreList() end end)
+                                        pcall(function() if refreshMobList then refreshMobList(true) end end)
                                 end
                         end
-                end
-
-                -- Toggle this group
-                entry.expanded = not entry.expanded
-                entry.expandIcon.Text = entry.expanded and "v" or ">"
-                for _, sb in ipairs(entry.subBtns) do
-                        sb.btn.Visible = entry.expanded
-                end
-
-                -- Update icon colors
-                for _, p in ipairs(entry.iconParts) do
-                        tw(p, 0.15, { BackgroundColor3 = entry.expanded and Color3.fromRGB(200, 160, 255) or Color3.fromRGB(180, 140, 255) })
-                end
+                )
         end)
 end
 
--- Helper: show a specific page
-local function showSubPage(pageName)
-        -- Hide all pages
-        for name, page in pairs(Pages) do
-                page.Visible = (name == pageName)
-        end
-        NavState.currentPage = pageName
-        NavState.pageVisible = true
-
-        -- Show MainFrame with animation
-        -- Use scale-based sizing (proportional to screen) so it never goes off-screen
-        MainFrame.Visible = true
-        MainFrame.Size = UDim2.new(0.38 * State.uiScale, 0, 0.72 * State.uiScale, 0)
-        MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
-        tw(MainFrame, 0.18, { GroupTransparency = 0 }, Enum.EasingStyle.Quad)
-        tw(MainFrameScale, 0.18, { Scale = State.uiScale }, Enum.EasingStyle.Quad)
-        Shadow.Visible = true
-
-        -- Update sub-button bars
-        for _, entry in ipairs(groupEntries) do
-                for _, sb in ipairs(entry.subBtns) do
-                        if sb.sub.page == pageName then
-                                tw(sb.bar, 0.15, { Size = UDim2.new(0, 3, 0, 20) })
-                                tw(sb.btn, 0.15, { BackgroundColor3 = Color3.fromRGB(40, 30, 55) })
-                                tw(sb.btn, 0.15, { TextColor3 = Color3.fromRGB(220, 200, 255) })
-                        else
-                                tw(sb.bar, 0.15, { Size = UDim2.new(0, 3, 0, 0) })
-                                tw(sb.btn, 0.15, { BackgroundColor3 = Color3.fromRGB(26, 20, 38) })
-                                tw(sb.btn, 0.15, { TextColor3 = Color3.fromRGB(150, 130, 180) })
-                        end
-                end
-        end
-end
-
--- Helper: hide page (functions keep running)
-local function hidePage()
-        NavState.pageVisible = false
-        tw(MainFrame, 0.15, { GroupTransparency = 1 }, Enum.EasingStyle.Quad)
-        tw(Shadow, 0.15, { BackgroundTransparency = 1 })
-        task.delay(0.15, function()
-                MainFrame.Visible = false
-                Shadow.Visible = false
-        end)
-        -- Clear sub-button highlights
-        for _, entry in ipairs(groupEntries) do
-                for _, sb in ipairs(entry.subBtns) do
-                        tw(sb.bar, 0.15, { Size = UDim2.new(0, 3, 0, 0) })
-                        tw(sb.btn, 0.15, { BackgroundColor3 = Color3.fromRGB(26, 20, 38) })
-                        tw(sb.btn, 0.15, { TextColor3 = Color3.fromRGB(150, 130, 180) })
-                end
-        end
-end
-
--- Wire up sub-button clicks (toggle: show if hidden, hide if visible)
-for _, entry in ipairs(groupEntries) do
-        for _, sb in ipairs(entry.subBtns) do
-                sb.btn.MouseButton1Click:Connect(function()
-                        if NavState.pageVisible and NavState.currentPage == sb.sub.page then
-                                -- Same page tapped again -> hide
-                                hidePage()
-                        else
-                                -- Different page or no page -> show
-                                showSubPage(sb.sub.page)
-                        end
-                end)
-        end
-end
-
--- ================================================================
--- // UI SCALE (applies to MainFrame size)
--- ================================================================
-State.uiScale = 1.0
-
-local function applyUIScale(scale)
-        State.uiScale = scale
-        -- Use scale-based sizing (proportional to screen, never goes off-screen)
-        MainFrame.Size = UDim2.new(0.38 * scale, 0, 0.72 * scale, 0)
-        MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
-        MainFrameScale.Scale = scale
-        UI.SizeLabel.Text = "UI Scale: " .. string.format("%.2f", scale) .. "x"
-        syncShadow()
-end
+PanelCloseBtn.MouseButton1Click:Connect(function()
+        closeContentPanel()
+        setActiveNav(nil)
+        setActiveChild(nil)
+end)
 
 -- ================================================================
 -- // DRAGGING (single shared listener — no per-frame connection leaks)
@@ -1231,12 +1235,10 @@ UserInputService.InputChanged:Connect(function(input)
         end
 end)
 
-local function makeDraggable(dragHandle, targetFrame, alwaysOn)
+local function makeDraggable(dragHandle, targetFrame)
         local d = { dragging = false, dragStart = nil, startPos = nil, dragInput = nil, targetFrame = targetFrame }
         table.insert(_dragTargets, d)
         dragHandle.InputBegan:Connect(function(input)
-                -- Only check pageDraggable flag for MainFrame (not sidebar)
-                if not alwaysOn and not State.pageDraggable then return end
                 if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
                         d.dragging = true
                         d.dragStart = input.Position
@@ -1255,57 +1257,68 @@ local function makeDraggable(dragHandle, targetFrame, alwaysOn)
         end)
 end
 
--- Make sidebar always draggable (user can move it anywhere)
-makeDraggable(SidebarFrame, SidebarFrame, true)
--- Make page draggable only when toggle is ON
-makeDraggable(TitleBar, MainFrame, false)
+makeDraggable(DockGrip, Dock)
+makeDraggable(PanelTitleBar, ContentPanel)
 
 -- ================================================================
--- // OPEN / CLOSE SIDEBAR (3-line button toggles sidebar, not page)
+-- // OPEN / CLOSE (dock show/hide FAB — the panel toggles per-tab instead)
 -- ================================================================
-local sidebarVisible = false  -- sidebar starts HIDDEN (only 3-line button visible)
+local ToggleButton = new("TextButton", {
+        Name = "ToggleButton", Size = UDim2.new(0, 52, 0, 52),
+        Position = UDim2.new(1, -68, 0, 24), BackgroundColor3 = Theme.Base,
+        AutoButtonColor = false, BorderSizePixel = 0, Text = "", ZIndex = 100,
+}, ScreenGui)
+corner(ToggleButton, 26)
+local toggleStroke = stroke(ToggleButton, Theme.Accent, 1.5, 0.5)
+lifeGradient(toggleStroke, 5)
+new("UIAspectRatioConstraint", { AspectRatio = 1 }, ToggleButton)
+local toggleIconHolder = new("Frame", {
+        Size = UDim2.new(0, 20, 0, 20), Position = UDim2.new(0.5, 0, 0.5, 0),
+        AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1,
+}, ToggleButton)
+Icons.menu(toggleIconHolder, 20, Theme.Accent)
+polish(ToggleButton)
 
-local function setSidebarVisible(visible)
-        sidebarVisible = visible
-        if visible then
-                SidebarFrame.Visible = true
-                tw(SidebarFrame, 0.20, { BackgroundTransparency = 0 }, Enum.EasingStyle.Quad)
+local dockOpen = false
+
+local function setDockOpen(open)
+        dockOpen = open
+        if open then
+                Dock.Visible = true
+                DockShadow.Visible = true
+                tw(Dock, 0.24, { GroupTransparency = 0 }, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+                tw(DockScale, 0.24, { Scale = 1 }, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
         else
-                tw(SidebarFrame, 0.16, { BackgroundTransparency = 1 }, Enum.EasingStyle.Quad)
+                closeContentPanel()
+                setActiveNav(nil)
+                setActiveChild(nil)
+                tw(Dock, 0.16, { GroupTransparency = 1 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+                tw(DockScale, 0.16, { Scale = 0.92 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
                 task.delay(0.16, function()
-                        if not sidebarVisible then SidebarFrame.Visible = false end
+                        if not dockOpen then
+                                Dock.Visible = false
+                                DockShadow.Visible = false
+                        end
                 end)
         end
 end
 
--- Sidebar starts hidden
-SidebarFrame.Visible = false
-
--- 3-line menu button toggles SIDEBAR (not the page)
 ToggleButton.MouseButton1Click:Connect(function()
-        setSidebarVisible(not sidebarVisible)
+        setDockOpen(not dockOpen)
 end)
 
--- Close button on page title bar hides the PAGE (not sidebar)
-CloseBtn.MouseButton1Click:Connect(function()
-        if NavState.pageVisible then
-                hidePage()
-        end
-end)
-
--- Desktop: press M to toggle sidebar
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
         if gameProcessed then return end
         if input.KeyCode == Enum.KeyCode.M then
-                setSidebarVisible(not sidebarVisible)
+                setDockOpen(not dockOpen)
         end
 end)
 
 print("[Pilgrammed] Aurora UI ready!")
 
--- ================================================================
--- // DRAGGABLE PAGE TOGGLE
--- ================================================================
+-- Initial state: only the dock appears. No content page opens until tapped.
+setDockOpen(true)
+
 print("[Pilgrammed] UI elements created!")
 local ok, err = pcall(function()
 
@@ -1783,7 +1796,7 @@ local function swingPickaxe()
         if not char then return end
         local pickaxe = char:FindFirstChild(State.equippedPickaxe and State.equippedPickaxe.Name or "")
         if not pickaxe then
-                if not State.mineAutoEquip then return end  -- don't auto-equip if toggle is OFF
+                if not State.mineAutoEquip then return end
                 pickaxe = findPickaxe()
                 if pickaxe then
                         equipPickaxe(pickaxe)
@@ -2226,17 +2239,17 @@ local function startAutoMobFarm()
 
         -- Find and equip weapon (only if auto-equip is ON)
         if State.mobAutoEquip then
-                local weapon
-                if State.lastEquippedWeaponName then
-                        weapon = findWeaponByName(State.lastEquippedWeaponName)
-                end
-                if not weapon then
-                        weapon = findWeapon()
-                end
-                if weapon then
-                        equipWeapon(weapon)
-                        task.wait(0.5)
-                else
+        local weapon
+        if State.lastEquippedWeaponName then
+                weapon = findWeaponByName(State.lastEquippedWeaponName)
+        end
+        if not weapon then
+                weapon = findWeapon()
+        end
+        if weapon then
+                equipWeapon(weapon)
+                task.wait(0.5)
+        else
                         warn("[AutoMob] No weapon found!")
                         return
                 end
@@ -2480,19 +2493,19 @@ local function startCampFarm()
 
         -- Equip weapon (by typed name, or fallback to any weapon) — only if auto-equip is ON
         if State.campAutoEquip then
-                local weapon
-                if State.campWeaponName and State.campWeaponName ~= "" then
-                        weapon = findWeaponByName(State.campWeaponName)
-                end
-                if not weapon then
-                        weapon = findWeapon()
-                end
-                if weapon then
-                        equipWeapon(weapon)
-                        task.wait(0.5)
-                else
+        local weapon
+        if State.campWeaponName and State.campWeaponName ~= "" then
+                weapon = findWeaponByName(State.campWeaponName)
+        end
+        if not weapon then
+                weapon = findWeapon()
+        end
+        if weapon then
+                equipWeapon(weapon)
+                task.wait(0.5)
+        else
                         if CampStatusLabel then
-                CampStatusLabel.Text = "Camp: No weapon found!"
+                                CampStatusLabel.Text = "Camp: No weapon found!"
                                 CampStatusLabel.TextColor3 = Color3.fromRGB(255, 120, 120)
                         end
                         return
@@ -2903,15 +2916,13 @@ end
 
 local function startAutoFarm()
         if #State.currentOreQueue == 0 then return end
-        if State.mineAutoEquip then
-                local pickaxe = findPickaxe()
-                if pickaxe then
-                        equipPickaxe(pickaxe)
-                        task.wait(0.6)
-                else
-                        warn("[AutoMiner] No pickaxe found.")
-                        return
-                end
+        local pickaxe = findPickaxe()
+        if pickaxe then
+                equipPickaxe(pickaxe)
+                task.wait(0.6)
+        else
+                warn("[AutoMiner] No pickaxe found.")
+                return
         end
         State.autoFarming = true
         State.currentOreQueueIndex = 1
@@ -3592,22 +3603,22 @@ end
 
 local function startAutoBow()
         if State.autoBow then return end
-        local bowName = BowNameBox.Text
+        local bowName = UI.BowNameBox.Text
         if not bowName or bowName == "" then
-                if BowStatus then
-                        BowStatus.Text = "Type a bow name first!"
-                        BowStatus.TextColor3 = Color3.fromRGB(255, 120, 120)
+                if UI.BowStatus then
+                        UI.BowStatus.Text = "Type a bow name first!"
+                        UI.BowStatus.TextColor3 = Color3.fromRGB(255, 120, 120)
                 end
                 return
         end
         State.bowName = bowName
         State.autoBow = true
-        AutoBowBtn.Text = "[ ]  Stop Auto Bow"
-        AutoBowBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 80)
+        UI.AutoBowBtn.Text = "[ ]  Stop Auto Bow"
+        UI.AutoBowBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 80)
 
-        if BowStatus then
-                BowStatus.Text = "Auto Bow ON - aiming at selected mobs..."
-                BowStatus.TextColor3 = Color3.fromRGB(100, 220, 255)
+        if UI.BowStatus then
+                UI.BowStatus.Text = "Auto Bow ON - aiming at selected mobs..."
+                UI.BowStatus.TextColor3 = Color3.fromRGB(100, 220, 255)
         end
         print("[AutoBow] Started with bow: " .. bowName .. " | rate: " .. tostring(State.bowShootRate) .. "s")
 
@@ -3633,21 +3644,21 @@ local function startAutoBow()
                                                                         1
                                                                 )
                                                         end)
-                                                        if BowStatus then
-                                                                BowStatus.Text = "Shooting " .. targetMob.Name .. "..."
-                                                                BowStatus.TextColor3 = Color3.fromRGB(100, 220, 130)
+                                                        if UI.BowStatus then
+                                                                UI.BowStatus.Text = "Shooting " .. targetMob.Name .. "..."
+                                                                UI.BowStatus.TextColor3 = Color3.fromRGB(100, 220, 130)
                                                         end
                                                 else
-                                                        if BowStatus then
-                                                                BowStatus.Text = "Bow '" .. State.bowName .. "' not equipped/found"
-                                                                BowStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
+                                                        if UI.BowStatus then
+                                                                UI.BowStatus.Text = "Bow '" .. State.bowName .. "' not equipped/found"
+                                                                UI.BowStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
                                                         end
                                                 end
                                         end
                                 else
-                                        if BowStatus then
-                                                BowStatus.Text = "No selected mobs in range..."
-                                                BowStatus.TextColor3 = Color3.fromRGB(200, 200, 130)
+                                        if UI.BowStatus then
+                                                UI.BowStatus.Text = "No selected mobs in range..."
+                                                UI.BowStatus.TextColor3 = Color3.fromRGB(200, 200, 130)
                                         end
                                 end
                         end
@@ -3658,16 +3669,16 @@ end
 
 local function stopAutoBow()
         State.autoBow = false
-        AutoBowBtn.Text = ">  Start Auto Bow"
-        AutoBowBtn.BackgroundColor3 = Color3.fromRGB(80, 100, 160)
-        if BowStatus then
-                BowStatus.Text = "Stopped"
-                BowStatus.TextColor3 = Color3.fromRGB(140, 150, 180)
+        UI.AutoBowBtn.Text = ">  Start Auto Bow"
+        UI.AutoBowBtn.BackgroundColor3 = Color3.fromRGB(80, 100, 160)
+        if UI.BowStatus then
+                UI.BowStatus.Text = "Stopped"
+                UI.BowStatus.TextColor3 = Color3.fromRGB(140, 150, 180)
         end
         print("[AutoBow] Stopped")
 end
 
-AutoBowBtn.MouseButton1Click:Connect(function()
+UI.AutoBowBtn.MouseButton1Click:Connect(function()
         if State.autoBow then
                 stopAutoBow()
         else
@@ -3675,14 +3686,14 @@ AutoBowBtn.MouseButton1Click:Connect(function()
         end
 end)
 
-BowRateDownBtn.MouseButton1Click:Connect(function()
+UI.BowRateDownBtn.MouseButton1Click:Connect(function()
         State.bowShootRate = math.max(0.05, State.bowShootRate - 0.05)
-        BowRateLabel.Text = "Bow Shoot Rate: " .. string.format("%.2f", State.bowShootRate) .. "s"
+        UI.BowRateLabel.Text = "Bow Shoot Rate: " .. string.format("%.2f", State.bowShootRate) .. "s"
 end)
 
-BowRateUpBtn.MouseButton1Click:Connect(function()
+UI.BowRateUpBtn.MouseButton1Click:Connect(function()
         State.bowShootRate = math.min(2.0, State.bowShootRate + 0.05)
-        BowRateLabel.Text = "Bow Shoot Rate: " .. string.format("%.2f", State.bowShootRate) .. "s"
+        UI.BowRateLabel.Text = "Bow Shoot Rate: " .. string.format("%.2f", State.bowShootRate) .. "s"
 end)
 
 -- ================================================================
@@ -3694,13 +3705,9 @@ local function killScript()
 
         -- Stop all features (wrapped in pcall in case state is mid-transition)
         pcall(function()
-                if State.autoFarming then
-                        -- Call stopAutoFarm if exists (we need to find it)
-                        -- Since we don't have direct ref, just disconnect everything
-                end
-                if State.autoMobFarming then
-                        -- stopAutoMobFarm exists in scope
-                end
+                if State.autoFarming then stopAutoFarm() end
+                if State.autoMobFarming then stopAutoMobFarm() end
+                if State.autoChickenFarm then stopChickenFarm() end
                 if State.autoCampFarming then stopCampFarm() end
                 if State.autoParry then stopAutoParry() end
                 if State.spamParry then stopSpamParry() end
@@ -3711,7 +3718,6 @@ local function killScript()
                 if State.autoFish then stopAutoFish() end
                 if State.fishDiscovery then stopFishDiscovery() end
                 if State.autoRifts then stopAutoRifts() end
-
         end)
 
         -- Disconnect ALL connections in State
@@ -3742,6 +3748,9 @@ local function killScript()
                 end
                 for _, c in ipairs(State.riftsConns or {}) do
                         pcall(function() c:Disconnect() end)
+                end
+                if State.chickenThread then
+                        State.autoChickenFarm = false
                 end
         end)
 
@@ -3782,7 +3791,19 @@ UI.KillScriptBtn.MouseButton1Click:Connect(function()
         killScript()
 end)
 
--- MOVE TOGGLE SETTING (handler at end of file)
+-- MOVE TOGGLE SETTING
+UI.MoveToggleBtn.MouseButton1Click:Connect(function()
+        State.toggleSquareMoveable = not State.toggleSquareMoveable
+        if State.toggleSquareMoveable then
+                UI.MoveToggleBtn.Text = "ON"
+                UI.MoveToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 80)
+                UI.MoveToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        else
+                UI.MoveToggleBtn.Text = "OFF"
+                UI.MoveToggleBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+                UI.MoveToggleBtn.TextColor3 = Color3.fromRGB(180, 180, 200)
+        end
+end)
 
 -- SWING INTERVAL
 UI.SwingDownBtn.MouseButton1Click:Connect(function()
@@ -4429,7 +4450,7 @@ local function scheduleOreRefresh()
         oreRefreshPending = true
         task.delay(MOB_REFRESH_DEBOUNCE, function()
                 oreRefreshPending = false
-                if Pages["Farm"] and Pages["Farm"].Visible then
+                if AutoFarmPage and AutoFarmPage.Visible then
                         refreshOreList()
                 end
         end)
@@ -4491,7 +4512,7 @@ local function scheduleMobRefresh()
         mobRefreshPending = true
         task.delay(MOB_REFRESH_DEBOUNCE, function()
                 mobRefreshPending = false
-                if Pages["Farm"] and Pages["Farm"].Visible then
+                if AutoFarmPage and AutoFarmPage.Visible then
                         refreshMobList(true)
                 end
         end)
@@ -4536,12 +4557,10 @@ LocalPlayer.CharacterAdded:Connect(function(newChar)
 
         if State.autoFarming then
                 task.wait(1)
-                if State.mineAutoEquip then
-                        local pickaxe = findPickaxe()
-                        if pickaxe then
-                                equipPickaxe(pickaxe)
-                                task.wait(0.5)
-                        end
+                local pickaxe = findPickaxe()
+                if pickaxe then
+                        equipPickaxe(pickaxe)
+                        task.wait(0.5)
                 end
                 startNoclip()
                 if State.flyConnection then State.flyConnection:Disconnect() end
@@ -5614,89 +5633,7 @@ if not riftsWireOk then
         warn("[Pilgrammed] Rifts button wiring failed: " .. tostring(riftsWireErr))
 end
 
-
--- UI Scale buttons
-UI.SizeDownBtn.MouseButton1Click:Connect(function()
-        State.uiScale = math.max(0.5, State.uiScale - 0.1)
-        applyUIScale(State.uiScale)
-end)
-UI.SizeUpBtn.MouseButton1Click:Connect(function()
-        State.uiScale = math.min(2.0, State.uiScale + 0.1)
-        applyUIScale(State.uiScale)
-end)
-
--- Draggable toggle: enable/disable dragging the page UI
-State.pageDraggable = false  -- default OFF (page stays centered)
-local dragConn = nil  -- stores the drag connection so we can disconnect
-
-UI.DragToggleBtn.MouseButton1Click:Connect(function()
-        State.pageDraggable = not State.pageDraggable
-        if State.pageDraggable then
-                UI.DragToggleBtn.Text = "ON"
-                UI.DragToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 80)
-                UI.DragToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-                -- Enable dragging by making TitleBar active for drag
-                MainFrame.Active = true
-        else
-                UI.DragToggleBtn.Text = "OFF"
-                UI.DragToggleBtn.BackgroundColor3 = Theme.Elevated
-                UI.DragToggleBtn.TextColor3 = Theme.TextDim
-                -- Disable dragging + recenter
-                MainFrame.Active = false
-                MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
-                syncShadow()
-        end
-end)
-
--- Reset position button: snaps page back to center
-UI.ResetPosBtn.MouseButton1Click:Connect(function()
-        MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
-        syncShadow()
-        print("[UI] Position reset to center")
-end)
-
--- Toggle button moveable (3-line): makes the floating toggle button draggable
-UI.MoveToggleBtn.MouseButton1Click:Connect(function()
-        State.toggleSquareMoveable = not State.toggleSquareMoveable
-        if State.toggleSquareMoveable then
-                UI.MoveToggleBtn.Text = "ON"
-                UI.MoveToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 80)
-                UI.MoveToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-        else
-                UI.MoveToggleBtn.Text = "OFF"
-                UI.MoveToggleBtn.BackgroundColor3 = Theme.Elevated
-                UI.MoveToggleBtn.TextColor3 = Theme.TextDim
-                -- Reset toggle button to default position
-                ToggleButton.Position = UDim2.new(1, -68, 0, 24)
-        end
-end)
-
--- Wire toggle button dragging (checked at drag time, not creation time)
--- The makeDraggable for ToggleButton is already called with alwaysOn=false,
--- but toggleSquareMoveable is checked separately in the drag handler.
--- We need to add a separate drag entry for ToggleButton.
-do
-        local d = { dragging = false, dragStart = nil, startPos = nil, dragInput = nil, targetFrame = ToggleButton }
-        table.insert(_dragTargets, d)
-        ToggleButton.InputBegan:Connect(function(input)
-                if not State.toggleSquareMoveable then return end
-                if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-                        d.dragging = true
-                        d.dragStart = input.Position
-                        d.startPos = ToggleButton.Position
-                        input.Changed:Connect(function()
-                                if input.UserInputState == Enum.UserInputState.End then
-                                        d.dragging = false
-                                end
-                        end)
-                end
-        end)
-        ToggleButton.InputChanged:Connect(function(input)
-                if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-                        d.dragInput = input
-                end
-        end)
-end
+end) -- end pcall
 
 -- ================================================================
 -- // GOLD FARM CHICKEN METHOD
@@ -5727,31 +5664,10 @@ local function findKillerChicken(maxDist)
         return nearest
 end
 
-local function equipEggOfPain()
-        local backpack = LocalPlayer:FindFirstChild("Backpack")
-        local char = LocalPlayer.Character
-        if not backpack or not char then return false end
-        local egg = backpack:FindFirstChild("Egg of Pain")
-        if not egg then
-                -- check if already equipped
-                egg = char:FindFirstChild("Egg of Pain")
-                if egg then return true end
-                return false
-        end
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum then
-                hum:EquipTool(egg)
-                task.wait(0.3)
-                return char:FindFirstChild("Egg of Pain") ~= nil
-        end
-        return false
-end
-
 local function drinkMagmaticSlime()
         local char = LocalPlayer.Character
         if not char then return false end
         local backpack = LocalPlayer:FindFirstChild("Backpack")
-        -- Check if already equipped or in backpack
         local slime = char:FindFirstChild("Gold Magmatic Slime")
         if not slime and backpack then
                 slime = backpack:FindFirstChild("Gold Magmatic Slime")
@@ -5767,22 +5683,8 @@ local function drinkMagmaticSlime()
         if not slime then return false end
         local remote = slime:FindFirstChild("RemoteEvent")
         if not remote then return false end
-        pcall(function()
-                remote:FireServer()
-        end)
+        pcall(function() remote:FireServer() end)
         return true
-end
-
-local function getEquippedWeaponType()
-        local char = LocalPlayer.Character
-        if not char then return nil, nil end
-        for _, tool in ipairs(char:GetChildren()) do
-                if tool:IsA("Tool") then
-                        if tool:FindFirstChild("Shoot") then return "bow", tool
-                        elseif tool:FindFirstChild("Slash") then return "melee", tool end
-                end
-        end
-        return nil, nil
 end
 
 local function startChickenFarm()
@@ -5796,15 +5698,12 @@ local function startChickenFarm()
 
         State.chickenThread = task.spawn(function()
                 local lastAttack = 0
-
                 while State.autoChickenFarm do
-                        -- STEP 1: TP to Nest
                         local nest = workspace:FindFirstChild("Map")
                         if nest then nest = nest:FindFirstChild("Landfill") end
                         if nest then nest = nest:FindFirstChild("Nest") end
                         if not nest then
                                 ChickenStatus.Text = "Nest not found! Waiting..."
-                                ChickenStatus.TextColor3 = Color3.fromRGB(255, 120, 120)
                                 task.wait(2)
                         else
                                 local nestPos = nil
@@ -5820,12 +5719,9 @@ local function startChickenFarm()
                                 if nestPos then
                                         local char = LocalPlayer.Character
                                         local hrp = char and char:FindFirstChild("HumanoidRootPart")
-                                        if hrp then
-                                                hrp.CFrame = CFrame.new(nestPos + Vector3.new(0, 5, 0))
-                                        end
+                                        if hrp then hrp.CFrame = CFrame.new(nestPos + Vector3.new(0, 5, 0)) end
                                 end
 
-                                -- STEP 2: Toggle Egg of Pain equip/unequip every 1s until chicken spawns
                                 ChickenStatus.Text = "Toggling Egg of Pain... Waiting for Killer Chicken..."
                                 ChickenStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
 
@@ -5852,15 +5748,12 @@ local function startChickenFarm()
                                 end
                                 if not State.autoChickenFarm then break end
 
-                                -- STEP 3: Kill the Killer Chicken
                                 ChickenStatus.Text = "Killer Chicken found! Killing..."
                                 ChickenStatus.TextColor3 = Color3.fromRGB(255, 120, 120)
-                                print("[ChickenFarm] Killer Chicken found - engaging")
 
                                 local weaponName = ChickenWeaponBox and ChickenWeaponBox.Text or ""
-                                local hasDrunkThisChicken = false  -- only drink once per chicken
+                                local hasDrunkThisChicken = false
 
-                                -- Equip weapon at start
                                 if weaponName and weaponName ~= "" then
                                         local w = findWeaponByName(weaponName)
                                         if w then
@@ -5875,36 +5768,23 @@ local function startChickenFarm()
                                         local hum = chicken:FindFirstChildOfClass("Humanoid")
                                         if not hum or hum.Health <= 0 then break end
 
-                                        -- Check if chicken HP < 500 → drink magmatic (only once per chicken)
                                         if State.chickenDrinkMagmatic and hum.Health < 500 and not hasDrunkThisChicken then
-                                                hasDrunkThisChicken = true  -- prevent drinking again
-
+                                                hasDrunkThisChicken = true
                                                 ChickenStatus.Text = "Chicken HP < 500! Drinking potion..."
                                                 ChickenStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
-                                                print("[ChickenFarm] Killer Chicken HP < 500 - drinking")
-
-                                                -- Step 1: Unequip everything first
                                                 local char = LocalPlayer.Character
                                                 local h = char and char:FindFirstChildOfClass("Humanoid")
                                                 if h then pcall(function() h:UnequipTools() end) end
                                                 task.wait(0.2)
-
-                                                -- Step 2: Equip potion and drink
                                                 drinkMagmaticSlime()
-
-                                                -- Step 3: Wait 1.5s (only potion equipped, nothing else)
                                                 local drinkStart = tick()
                                                 while State.autoChickenFarm and (tick() - drinkStart) < 1.5 do
                                                         task.wait(0.1)
                                                 end
-
-                                                -- Step 4: Unequip potion
                                                 char = LocalPlayer.Character
                                                 h = char and char:FindFirstChildOfClass("Humanoid")
                                                 if h then pcall(function() h:UnequipTools() end) end
                                                 task.wait(0.2)
-
-                                                -- Step 5: Re-equip weapon
                                                 ChickenStatus.Text = "Re-equipping weapon..."
                                                 ChickenStatus.TextColor3 = Color3.fromRGB(255, 120, 120)
                                                 if weaponName and weaponName ~= "" then
@@ -5915,11 +5795,8 @@ local function startChickenFarm()
                                                                 task.wait(0.3)
                                                         end
                                                 end
-                                                -- Continue attacking (loop back)
                                         else
-                                                -- Attack the chicken
                                                 if weaponName and weaponName ~= "" then
-                                                        -- Equip weapon if not already equipped
                                                         local char = LocalPlayer.Character
                                                         local weapon = char and char:FindFirstChild(weaponName)
                                                         if not weapon then
@@ -5931,19 +5808,16 @@ local function startChickenFarm()
                                                                         weapon = char and char:FindFirstChild(weaponName)
                                                                 end
                                                         end
-                                                        -- Attack with weapon
                                                         if weapon then
                                                                 tpToMob(chicken)
                                                                 local mobHrp = chicken:FindFirstChild("HumanoidRootPart")
                                                                 local now = tick()
                                                                 if weapon:FindFirstChild("Shoot") and mobHrp then
-                                                                        -- Bow attack
                                                                         if now - lastAttack >= 0.1 then
                                                                                 lastAttack = now
                                                                                 pcall(function() weapon.Shoot:InvokeServer(mobHrp.Position, "Arrow", true, 1) end)
                                                                         end
                                                                 elseif weapon:FindFirstChild("Slash") then
-                                                                        -- Melee attack
                                                                         if now - lastAttack >= MOB_ATTACK_INTERVAL then
                                                                                 lastAttack = now
                                                                                 local atkType = getNextAttackType() or 1
@@ -5952,20 +5826,17 @@ local function startChickenFarm()
                                                                 end
                                                                 task.wait(0.05)
                                                         else
-                                                                task.wait(0.2)  -- weapon not found, wait before retry
+                                                                task.wait(0.2)
                                                         end
                                                 else
-                                                        -- No weapon name typed → do nothing (don't auto-equip random weapons)
                                                         task.wait(0.5)
                                                 end
                                         end
                                 end
 
-                                -- Chicken dead
                                 if State.autoChickenFarm then
                                         ChickenStatus.Text = "Killer Chicken killed! Going back to Nest..."
                                         ChickenStatus.TextColor3 = Color3.fromRGB(100, 255, 150)
-                                        print("[ChickenFarm] Killer Chicken killed - back to step 1")
                                 end
                         end
                         task.wait(0.5)
@@ -5983,11 +5854,7 @@ local function stopChickenFarm()
 end
 
 ChickenFarmBtn.MouseButton1Click:Connect(function()
-        if State.autoChickenFarm then
-                stopChickenFarm()
-        else
-                startChickenFarm()
-        end
+        if State.autoChickenFarm then stopChickenFarm() else startChickenFarm() end
 end)
 
 ChickenDrinkBtn.MouseButton1Click:Connect(function()
@@ -6003,7 +5870,54 @@ ChickenDrinkBtn.MouseButton1Click:Connect(function()
         end
 end)
 
-end) -- end pcall
+
+-- UI Scale handlers
+UI.SizeDownBtn.MouseButton1Click:Connect(function()
+        State.uiScale = math.max(0.5, State.uiScale - 0.1)
+        applyUIScale(State.uiScale)
+end)
+UI.SizeUpBtn.MouseButton1Click:Connect(function()
+        State.uiScale = math.min(2.0, State.uiScale + 0.1)
+        applyUIScale(State.uiScale)
+end)
+UI.DragToggleBtn.MouseButton1Click:Connect(function()
+        State.pageDraggable = not State.pageDraggable
+        if State.pageDraggable then
+                UI.DragToggleBtn.Text = "ON"
+                UI.DragToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 80)
+                UI.DragToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        else
+                UI.DragToggleBtn.Text = "OFF"
+                UI.DragToggleBtn.BackgroundColor3 = Theme.Elevated
+                UI.DragToggleBtn.TextColor3 = Theme.TextDim
+                ContentPanel.Position = UDim2.new(0.5, 0, 0.5, 0)
+        end
+end)
+UI.ResetPosBtn.MouseButton1Click:Connect(function()
+        ContentPanel.Position = UDim2.new(0.5, 0, 0.5, 0)
+end)
+UI.MoveToggleBtn.MouseButton1Click:Connect(function()
+        State.toggleSquareMoveable = not State.toggleSquareMoveable
+        if State.toggleSquareMoveable then
+                UI.MoveToggleBtn.Text = "ON"
+                UI.MoveToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 80)
+                UI.MoveToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        else
+                UI.MoveToggleBtn.Text = "OFF"
+                UI.MoveToggleBtn.BackgroundColor3 = Theme.Elevated
+                UI.MoveToggleBtn.TextColor3 = Theme.TextDim
+        end
+end)
+
+local function applyUIScale(scale)
+        State.uiScale = scale
+        ContentPanel.Size = UDim2.new(0.42 * scale, 0, 0.85 * scale, 0)
+        ContentPanel.Position = UDim2.new(0.5, 0, 0.5, 0)
+        UI.SizeLabel.Text = "UI Scale: " .. string.format("%.2f", scale) .. "x"
+end
+
+
+
 
 if not ok then
         warn("[Pilgrammed] Script error: " .. tostring(err))
