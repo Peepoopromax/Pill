@@ -916,10 +916,10 @@ end
 local AutoFishingPage = newPage("AutoFishing")
 do
 local fishCard = card(AutoFishingPage, 1, "Auto Fishing")
-local RodNameBox = textInput(fishCard, 1, "Rod name (e.g. Rod of Kings)", "")
-local FishWaitDownBtn, FishWaitUpBtn, FishWaitLabel = stepper(fishCard, 2, "Wait before reel: " .. string.format("%.2f", State.fishWaitSeconds) .. " sec", 0.1, 15)
-local AutoFishBtn = actionButton(fishCard, 3, "Start Auto Fish", "primary")
-local FishStatus = statusLabel(fishCard, 4, "Status: Idle")
+UI.RodNameBox = textInput(fishCard, 1, "Rod name (e.g. Rod of Kings)", "")
+UI.FishWaitDownBtn, UI.FishWaitUpBtn, UI.FishWaitLabel = stepper(fishCard, 2, "Wait before reel: " .. string.format("%.2f", State.fishWaitSeconds) .. " sec", 0.1, 15)
+UI.AutoFishBtn = actionButton(fishCard, 3, "Start Auto Fish", "primary")
+UI.FishStatus = statusLabel(fishCard, 4, "Status: Idle")
 end
 
 -- ================================================================
@@ -1043,7 +1043,22 @@ local timingCard = card(SettingsPage, 3, "Timing")
 UI.SwingDownBtn, UI.SwingUpBtn, UI.SwingLabel = stepper(timingCard, 1, "Swing Interval: " .. string.format("%.2f", SWING_INTERVAL) .. "s", 0.1, 1.0)
 UI.RangeDownBtn, UI.RangeUpBtn, UI.RangeLabel = stepper(timingCard, 2, "Parry Range: " .. tostring(PARRY_RANGE) .. " studs", 5, 100)
 
-local dangerCard = card(SettingsPage, 4, "Danger Zone", Theme.Danger)
+local dragCard = card(SettingsPage, 4, "Page Position")
+caption(dragCard, 1, "Enable dragging to move the page UI. Disable to lock it.")
+local dragRow = new("Frame", { Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1, LayoutOrder = 2 }, dragCard)
+new("TextLabel", {
+        Size = UDim2.new(1, -60, 1, 0), BackgroundTransparency = 1, Text = "Page Draggable",
+        Font = Theme.Font, TextSize = 12, TextColor3 = Theme.TextDim, TextXAlignment = Enum.TextXAlignment.Left,
+}, dragRow)
+UI.DragToggleBtn = new("TextButton", {
+        Size = UDim2.new(0, 54, 0, 28), Position = UDim2.new(1, -54, 0, 2), BackgroundColor3 = Theme.Elevated,
+        BorderSizePixel = 0, Text = "OFF", Font = Theme.FontBold, TextSize = 12, TextColor3 = Theme.TextDim,
+        AutoButtonColor = false,
+}, dragRow)
+corner(UI.DragToggleBtn, 10); polish(UI.DragToggleBtn, { noScale = true })
+UI.ResetPosBtn = actionButton(dragCard, 3, "Reset Position to Center")
+
+local dangerCard = card(SettingsPage, 5, "Danger Zone", Theme.Danger)
 caption(dangerCard, 1, "Stops every feature and completely destroys the UI. This cannot be undone without re-running the script.")
 UI.KillScriptBtn = actionButton(dangerCard, 2, "Kill Script", "danger")
 
@@ -4847,14 +4862,14 @@ end
 local function startFishDiscovery()
         if State.fishDiscovery then return end
         State.fishDiscovery = true
-        State.fishRodName = RodNameBox.Text or "Rod Of Kings"
+        State.fishRodName = UI.RodNameBox.Text or "Rod Of Kings"
         FishDiscoveryBtn.Text = "Discovery Mode: ON (logging...)"
         FishDiscoveryBtn.BackgroundColor3 = Color3.fromRGB(180, 140, 40)
 
         fishState = "idle"
-        if FishStatus then
-                FishStatus.Text = "DISCOVERY ON - Cast your rod and wait for bite!"
-                FishStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
+        if UI.FishStatus then
+                UI.FishStatus.Text = "DISCOVERY ON - Cast your rod and wait for bite!"
+                UI.FishStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
         end
         print("[FishDiscovery] === STARTED ===")
         print("[FishDiscovery] Rod name: " .. State.fishRodName)
@@ -4863,15 +4878,15 @@ local function startFishDiscovery()
         setupFishDetection(
                 function(signalType, obj)  -- onBite
                         print("[FishDiscovery] *** BITE! ***")
-                        if FishStatus then
-                                FishStatus.Text = "BITE detected! Click to reel in!"
-                                FishStatus.TextColor3 = Color3.fromRGB(100, 255, 150)
+                        if UI.FishStatus then
+                                UI.FishStatus.Text = "BITE detected! Click to reel in!"
+                                UI.FishStatus.TextColor3 = Color3.fromRGB(100, 255, 150)
                         end
                 end,
                 function(eventStr)  -- onEvent
                         print("[FishDiscovery] EVENT: " .. eventStr)
-                        if FishStatus then
-                                FishStatus.Text = eventStr:sub(1, 60)
+                        if UI.FishStatus then
+                                UI.FishStatus.Text = eventStr:sub(1, 60)
                         end
                 end
         )
@@ -4885,9 +4900,9 @@ local function stopFishDiscovery()
         State.fishConns = {}
         FishDiscoveryBtn.Text = "Discovery Mode: OFF (log fishing events)"
         FishDiscoveryBtn.BackgroundColor3 = Color3.fromRGB(100, 80, 40)
-        if FishStatus then
-                FishStatus.Text = "Discovery stopped."
-                FishStatus.TextColor3 = Color3.fromRGB(140, 150, 180)
+        if UI.FishStatus then
+                UI.FishStatus.Text = "Discovery stopped."
+                UI.FishStatus.TextColor3 = Color3.fromRGB(140, 150, 180)
         end
         print("[FishDiscovery] === STOPPED ===")
 end
@@ -4896,13 +4911,13 @@ end
 -- Flow: cast -> wait N sec -> try to catch for 1 sec (stop early if Loot fires) -> if no fish, recast -> repeat
 
 -- Wait time button handlers
-FishWaitDownBtn.MouseButton1Click:Connect(function()
+UI.FishWaitDownBtn.MouseButton1Click:Connect(function()
         State.fishWaitSeconds = math.max(0.1, State.fishWaitSeconds - 0.1)
-        FishWaitLabel.Text = "Wait before reel: " .. string.format("%.2f", State.fishWaitSeconds) .. " sec"
+        UI.FishWaitLabel.Text = "Wait before reel: " .. string.format("%.2f", State.fishWaitSeconds) .. " sec"
 end)
-FishWaitUpBtn.MouseButton1Click:Connect(function()
+UI.FishWaitUpBtn.MouseButton1Click:Connect(function()
         State.fishWaitSeconds = math.min(15, State.fishWaitSeconds + 0.1)
-        FishWaitLabel.Text = "Wait before reel: " .. string.format("%.2f", State.fishWaitSeconds) .. " sec"
+        UI.FishWaitLabel.Text = "Wait before reel: " .. string.format("%.2f", State.fishWaitSeconds) .. " sec"
 end)
 
 
@@ -4923,11 +4938,11 @@ end
 local function startAutoFish()
         if State.autoFish then return end
         State.autoFish = true
-        State.fishRodName = RodNameBox.Text or "Rod of Kings"
-        AutoFishBtn.Text = "[ ]  Stop Auto Fish"
-        AutoFishBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
-        FishStatus.Text = "Waiting for you to cast..."
-        FishStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
+        State.fishRodName = UI.RodNameBox.Text or "Rod of Kings"
+        UI.AutoFishBtn.Text = "[ ]  Stop Auto Fish"
+        UI.AutoFishBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
+        UI.FishStatus.Text = "Waiting for you to cast..."
+        UI.FishStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
         print("[AutoFish] === STARTED === | Rod: " .. State.fishRodName)
         print("[AutoFish] CAST YOUR LINE manually — script will detect it and go full auto!")
 
@@ -4945,8 +4960,8 @@ local function startAutoFish()
                                 fishCaught = true
                                 local name = tostring(select(1, ...) or "?")
                                 print("[AutoFish] CAUGHT #" .. catchCount .. ": " .. name)
-                                FishStatus.Text = "Caught #" .. catchCount .. ": " .. name
-                                FishStatus.TextColor3 = Color3.fromRGB(100, 255, 150)
+                                UI.FishStatus.Text = "Caught #" .. catchCount .. ": " .. name
+                                UI.FishStatus.TextColor3 = Color3.fromRGB(100, 255, 150)
                         end)
                         table.insert(State.fishConns, lootConn)
                 end
@@ -4959,8 +4974,8 @@ local function startAutoFish()
                         catchCount = catchCount + 1
                         fishCaught = true
                         print("[AutoFish] CAUGHT #" .. catchCount .. " (chest): " .. child.Name)
-                        FishStatus.Text = "Caught #" .. catchCount .. " (chest)"
-                        FishStatus.TextColor3 = Color3.fromRGB(100, 255, 150)
+                        UI.FishStatus.Text = "Caught #" .. catchCount .. " (chest)"
+                        UI.FishStatus.TextColor3 = Color3.fromRGB(100, 255, 150)
                 end)
                 table.insert(State.fishConns, chestConn)
         end
@@ -5011,8 +5026,8 @@ local function startAutoFish()
 
         -- Helper: wait for player to cast (Bobber appears)
         local function waitForPlayerCast()
-                FishStatus.Text = "Waiting for you to cast..."
-                FishStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
+                UI.FishStatus.Text = "Waiting for you to cast..."
+                UI.FishStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
                 print("[AutoFish] Waiting for player to cast line...")
                 while State.autoFish and not isPlayerFishing() do
                         task.wait(0.1)
@@ -5040,8 +5055,8 @@ local function startAutoFish()
                 -- Now we're in full auto mode
                 while State.autoFish do
                         -- STEP 2: Wait N seconds (full wait — for fish to bite)
-                        FishStatus.Text = "Fishing... waiting " .. string.format("%.2f", State.fishWaitSeconds) .. "s for bite"
-                        FishStatus.TextColor3 = Color3.fromRGB(100, 220, 255)
+                        UI.FishStatus.Text = "Fishing... waiting " .. string.format("%.2f", State.fishWaitSeconds) .. "s for bite"
+                        UI.FishStatus.TextColor3 = Color3.fromRGB(100, 220, 255)
                         local waitStart = tick()
                         while State.autoFish and (tick() - waitStart) < State.fishWaitSeconds do
                                 task.wait(0.1)
@@ -5049,8 +5064,8 @@ local function startAutoFish()
                         if not State.autoFish then break end
 
                         -- STEP 3: Spam fishing (catching) max 5x @ 0.15s cooldown, stop early if caught (Loot or chest)
-                        FishStatus.Text = "Catching..."
-                        FishStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
+                        UI.FishStatus.Text = "Catching..."
+                        UI.FishStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
                         fishCaught = false
                         local reelCount = 0
                         while State.autoFish and not fishCaught and reelCount < 5 and isPlayerFishing() do
@@ -5066,8 +5081,8 @@ local function startAutoFish()
 
                         -- STEP 4: Cooldown 0.25 seconds
                         if State.autoFish then
-                                FishStatus.Text = "Cooldown 0.25s..."
-                                FishStatus.TextColor3 = Color3.fromRGB(200, 200, 130)
+                                UI.FishStatus.Text = "Cooldown 0.25s..."
+                                UI.FishStatus.TextColor3 = Color3.fromRGB(200, 200, 130)
                                 task.wait(0.25)
                         end
 
@@ -5079,8 +5094,8 @@ local function startAutoFish()
                                 if rod then
                                         fireFishingEvent(rod, savedCastPos or getCastPosition())
                                         print("[AutoFish] Auto-cast at " .. tostring(savedCastPos))
-                                        FishStatus.Text = "Cast! Waiting " .. string.format("%.2f", State.fishWaitSeconds) .. "s..."
-                                        FishStatus.TextColor3 = Color3.fromRGB(100, 220, 255)
+                                        UI.FishStatus.Text = "Cast! Waiting " .. string.format("%.2f", State.fishWaitSeconds) .. "s..."
+                                        UI.FishStatus.TextColor3 = Color3.fromRGB(100, 220, 255)
                                 end
                         end
 
@@ -5095,16 +5110,16 @@ local function stopAutoFish()
                 pcall(function() c:Disconnect() end)
         end
         State.fishConns = {}
-        AutoFishBtn.Text = ">  Start Auto Fish"
-        AutoFishBtn.BackgroundColor3 = Color3.fromRGB(40, 120, 100)
-        if FishStatus then
-                FishStatus.Text = "Auto Fish stopped"
-                FishStatus.TextColor3 = Color3.fromRGB(140, 150, 180)
+        UI.AutoFishBtn.Text = ">  Start Auto Fish"
+        UI.AutoFishBtn.BackgroundColor3 = Color3.fromRGB(40, 120, 100)
+        if UI.FishStatus then
+                UI.FishStatus.Text = "Auto Fish stopped"
+                UI.FishStatus.TextColor3 = Color3.fromRGB(140, 150, 180)
         end
         print("[AutoFish] Stopped")
 end
 
-AutoFishBtn.MouseButton1Click:Connect(function()
+UI.AutoFishBtn.MouseButton1Click:Connect(function()
         if State.autoFish then stopAutoFish() else startAutoFish() end
 end)
 
@@ -5870,16 +5885,7 @@ ChickenDrinkBtn.MouseButton1Click:Connect(function()
         end
 end)
 
-
--- UI Scale handlers
-UI.SizeDownBtn.MouseButton1Click:Connect(function()
-        State.uiScale = math.max(0.5, State.uiScale - 0.1)
-        applyUIScale(State.uiScale)
-end)
-UI.SizeUpBtn.MouseButton1Click:Connect(function()
-        State.uiScale = math.min(2.0, State.uiScale + 0.1)
-        applyUIScale(State.uiScale)
-end)
+-- Page draggable toggle
 UI.DragToggleBtn.MouseButton1Click:Connect(function()
         State.pageDraggable = not State.pageDraggable
         if State.pageDraggable then
@@ -5890,31 +5896,12 @@ UI.DragToggleBtn.MouseButton1Click:Connect(function()
                 UI.DragToggleBtn.Text = "OFF"
                 UI.DragToggleBtn.BackgroundColor3 = Theme.Elevated
                 UI.DragToggleBtn.TextColor3 = Theme.TextDim
-                ContentPanel.Position = UDim2.new(0.5, 0, 0.5, 0)
+                ContentPanel.Position = UDim2.new(0.58, 0, 0.5, 0)
         end
 end)
 UI.ResetPosBtn.MouseButton1Click:Connect(function()
-        ContentPanel.Position = UDim2.new(0.5, 0, 0.5, 0)
+        ContentPanel.Position = UDim2.new(0.58, 0, 0.5, 0)
 end)
-UI.MoveToggleBtn.MouseButton1Click:Connect(function()
-        State.toggleSquareMoveable = not State.toggleSquareMoveable
-        if State.toggleSquareMoveable then
-                UI.MoveToggleBtn.Text = "ON"
-                UI.MoveToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 80)
-                UI.MoveToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-        else
-                UI.MoveToggleBtn.Text = "OFF"
-                UI.MoveToggleBtn.BackgroundColor3 = Theme.Elevated
-                UI.MoveToggleBtn.TextColor3 = Theme.TextDim
-        end
-end)
-
-local function applyUIScale(scale)
-        State.uiScale = scale
-        ContentPanel.Size = UDim2.new(0.42 * scale, 0, 0.85 * scale, 0)
-        ContentPanel.Position = UDim2.new(0.5, 0, 0.5, 0)
-        UI.SizeLabel.Text = "UI Scale: " .. string.format("%.2f", scale) .. "x"
-end
 
 
 
