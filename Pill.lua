@@ -4660,13 +4660,41 @@ local function findRodTool(rodName)
         return nil
 end
 
--- Find the SeaBox Water part (where the player is fishing)
+-- Find the water part for the player's current zone (cached, never yields)
+local cachedWaterPart = nil
+local waterCacheTime = 0
 local function findWaterPart()
+        -- Return cached result if fresh (< 30 seconds)
+        if cachedWaterPart and cachedWaterPart.Parent and (tick() - waterCacheTime) < 30 then
+                return cachedWaterPart
+        end
+        
         local map = workspace:FindFirstChild("Map")
         if not map then return nil end
-        local seaBox = map:FindFirstChild("SeaBox")
-        if not seaBox then return nil end
-        return seaBox:FindFirstChild("Water")
+        
+        -- Search direct children of Map for common sea names
+        local seaNames = {"Sea", "Water", "SeaBox"}
+        for _, child in ipairs(map:GetChildren()) do
+                for _, seaName in ipairs(seaNames) do
+                        local sea = child:FindFirstChild(seaName)
+                        if sea then
+                                if sea:IsA("BasePart") then
+                                        cachedWaterPart = sea
+                                        waterCacheTime = tick()
+                                        return sea
+                                elseif sea:IsA("Model") or sea:IsA("Folder") then
+                                        local wp = sea:FindFirstChildWhichIsA("BasePart")
+                                        if wp then
+                                                cachedWaterPart = wp
+                                                waterCacheTime = tick()
+                                                return wp
+                                        end
+                                end
+                        end
+                end
+        end
+        
+        return nil
 end
 
 -- Find the bait name (look for "Gelatinous Sludge" or similar in player's inventory/rod)
@@ -4677,24 +4705,34 @@ end
 
 -- Fire the fishing Event remote on the rod (this is what casts AND reels in)
 -- Args: (WaterPart, position, baitName)
+-- NEVER yields — uses FindFirstChild instead of WaitForChild
 local function fireFishingEvent(rod, position)
         if not rod then return false end
-        local ok = pcall(function()
-                local waterPart = workspace:WaitForChild("Map"):WaitForChild("SeaBox"):WaitForChild("Water")
-                local event = rod:WaitForChild("Event")
-                local args = { waterPart, position, getBaitName() }
-                event:FireServer(unpack(args))
-        end)
-        if not ok then
-                print("[AutoFish] Failed to fire fishing Event")
+        local event = rod:FindFirstChild("Event")
+        if not event then return false end
+        local waterPart = findWaterPart()
+        if not waterPart then
+                print("[AutoFish] No water part found!")
+                return false
         end
+        local ok = pcall(function()
+                event:FireServer(waterPart, position, getBaitName())
+        end)
         return ok
 end
 
--- Get the position to cast at (in front of player, slightly down toward water)
+-- Get the position to cast at — uses player's current position (works everywhere, not hardcoded)
 local function getCastPosition()
-        -- pinned known-working cast vector
-        return Vector3.new(-324.7981262207031, -29.400001525878906, -935.5565185546875)
+        local char = LocalPlayer.Character
+        if char then
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                        -- Cast slightly in front of player and down toward water
+                        return hrp.Position + Vector3.new(0, -5, 0)
+                end
+        end
+        -- Fallback: origin (should never reach here)
+        return Vector3.new(0, 0, 0)
 end
 
 -- PRECISE fishing detection based on Discovery Mode findings:
@@ -4982,13 +5020,17 @@ local function startAutoFish()
 
         -- Bait/bobber detector: name-pattern + 15 stud range, event-cached (not polled) since
         -- cast/catch fire the SAME remote — physical presence is the only reliable "in/out" signal
-        local BAIT_RANGE = 15
+        local BAIT_RANGE = 30
         local BAIT_PATTERNS = {"bobber", "bait", "float", "cork", "hook", "lure", "line"}
         local cachedBait = nil
 
         local function baitPos(inst)
                 if inst:IsA("BasePart") then return inst.Position end
-                if inst.PrimaryPart then return inst.PrimaryPart.Position end
+                -- Only access PrimaryPart on Models (not on LinearVelocity, Constraints, etc.)
+                if inst:IsA("Model") then
+                        local pp = inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart")
+                        if pp then return pp.Position end
+                end
                 local p = inst:FindFirstChildWhichIsA("BasePart", true)
                 return p and p.Position
         end
@@ -5063,19 +5105,49 @@ local function startAutoFish()
                         end
                         if not State.autoFish then break end
 
-                        -- STEP 3: Spam fishing (catching) max 5x @ 0.15s cooldown, stop early if caught (Loot or chest)
+                        -- STEP 3: Spam fishing (catching) — 4 tries, 0.2s cooldown each, stop early if caught
                         UI.FishStatus.Text = "Catching..."
                         UI.FishStatus.TextColor3 = Color3.fromRGB(255, 200, 80)
                         fishCaught = false
                         local reelCount = 0
-                        while State.autoFish and not fishCaught and reelCount < 5 and isPlayerFishing() do
+                        print("[AutoFish] STEP 3 START - waiting done, now catching")
+                        while State.autoFish and not fishCaught and reelCount < 4 do
                                 local rod = findRodTool(State.fishRodName)
+                                if not rod then
+                                        -- Fallback: find any tool with Event remote
+                                        local char = LocalPlayer.Character
+                                        if char then
+                                                for _, tool in ipairs(char:GetChildren()) do
+                                                        if tool:IsA("Tool") and tool:FindFirstChild("Event") then
+                                                                rod = tool
+                                                                State.fishRodName = tool.Name
+                                                                break
+                                                        end
+                                                end
+                                        end
+                                        local backpack = LocalPlayer:FindFirstChild("Backpack")
+                                        if not rod and backpack then
+                                                for _, tool in ipairs(backpack:GetChildren()) do
+                                                        if tool:IsA("Tool") and tool:FindFirstChild("Event") then
+                                                                local hum = char and char:FindFirstChildOfClass("Humanoid")
+                                                                if hum then pcall(function() hum:EquipTool(tool) end) end
+                                                                task.wait(0.1)
+                                                                rod = char and char:FindFirstChild(tool.Name)
+                                                                State.fishRodName = tool.Name
+                                                                break
+                                                        end
+                                                end
+                                        end
+                                end
                                 if rod then
-                                        fireFishingEvent(rod, savedCastPos or getCastPosition())
+                                        local fireOk = fireFishingEvent(rod, savedCastPos or getCastPosition())
                                         reelCount = reelCount + 1
+                                        print("[AutoFish] Catch fire #" .. reelCount .. " ok=" .. tostring(fireOk))
+                                else
+                                        print("[AutoFish] No rod found! Tried name: " .. tostring(State.fishRodName))
                                 end
                                 if fishCaught then break end
-                                task.wait(0.15)
+                                task.wait(0.2)
                         end
                         print("[AutoFish] Catch done: fired " .. reelCount .. "x | caught=" .. tostring(fishCaught))
 
@@ -5086,9 +5158,8 @@ local function startAutoFish()
                                 task.wait(0.25)
                         end
 
-                        -- STEP 5: Auto-cast — ONLY if bait isn't already in water (same remote as catch, so
-                        -- physical check prevents firing "cast" while actually still mid-catch = infinite stall)
-                        if State.autoFish and not isPlayerFishing() then
+                        -- STEP 5: Auto-cast for next round (always fire, even if bait still visible)
+                        if State.autoFish then
                                 fishCaught = false
                                 local rod = findRodTool(State.fishRodName)
                                 if rod then
@@ -5648,11 +5719,12 @@ if not riftsWireOk then
         warn("[Pilgrammed] Rifts button wiring failed: " .. tostring(riftsWireErr))
 end
 
-end) -- end pcall
 
 -- ================================================================
--- // GOLD FARM CHICKEN METHOD
+-- // GOLD FARM CHICKEN METHOD (inside pcall scope via forward refs)
 -- ================================================================
+-- These functions need access to pcall-scoped locals (forEachMob, findWeaponByName, etc.)
+-- So we wrap them in a pcall that can access the outer pcall's locals via closure.
 
 local function findKillerChicken(maxDist)
         local char = LocalPlayer.Character
@@ -5664,17 +5736,19 @@ local function findKillerChicken(maxDist)
         local nearestDist = maxDist or 30
         local mobsFolder = workspace:FindFirstChild("Mobs")
         if not mobsFolder then return nil end
-        forEachMob(mobsFolder, function(mob, hum)
-                if hum.Health > 0 and mob.Name == "Killer Chicken" then
-                        local mobHrp = mob:FindFirstChild("HumanoidRootPart")
-                        if mobHrp then
-                                local d = (mobHrp.Position - myPos).Magnitude
-                                if d <= nearestDist then
-                                        nearestDist = d
-                                        nearest = mob
+        pcall(function()
+                forEachMob(mobsFolder, function(mob, hum)
+                        if hum and hum.Health > 0 and mob.Name == "Killer Chicken" then
+                                local mobHrp = mob:FindFirstChild("HumanoidRootPart")
+                                if mobHrp then
+                                        local d = (mobHrp.Position - myPos).Magnitude
+                                        if d <= nearestDist then
+                                                nearestDist = d
+                                                nearest = mob
+                                        end
                                 end
                         end
-                end
+                end)
         end)
         return nearest
 end
@@ -5689,7 +5763,7 @@ local function drinkMagmaticSlime()
                 if slime then
                         local hum = char:FindFirstChildOfClass("Humanoid")
                         if hum then
-                                hum:EquipTool(slime)
+                                pcall(function() hum:EquipTool(slime) end)
                                 task.wait(0.3)
                                 slime = char:FindFirstChild("Gold Magmatic Slime")
                         end
@@ -5903,10 +5977,12 @@ UI.ResetPosBtn.MouseButton1Click:Connect(function()
         ContentPanel.Position = UDim2.new(0.58, 0, 0.5, 0)
 end)
 
-
-
+end) -- end pcall
 
 if not ok then
         warn("[Pilgrammed] Script error: " .. tostring(err))
+        print("[Pilgrammed] !!! PCALL FAILED — button handlers will NOT work! Error: " .. tostring(err))
+else
+        print("[Pilgrammed] PCALL succeeded — all logic loaded")
 end
 print("[Pilgrammed] Script loaded!")
